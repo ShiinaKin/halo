@@ -32,6 +32,7 @@ import {
   ExtensionNodeSelected,
   ExtensionOrderedList,
   ExtensionPlaceholder,
+  ExtensionRangeSelection,
   ExtensionSearchAndReplace,
   ExtensionStrike,
   ExtensionSubscript,
@@ -74,7 +75,6 @@ import { OverlayScrollbarsComponent } from "overlayscrollbars-vue";
 import {
   inject,
   markRaw,
-  nextTick,
   onBeforeUnmount,
   onMounted,
   ref,
@@ -169,6 +169,7 @@ const attachmentSelectorModal = ref(false);
 const { onAttachmentSelect, attachmentResult } = useAttachmentSelect();
 
 const editor = shallowRef<Editor>();
+const editorTitleRef = ref();
 
 const { pluginModules } = usePluginModuleStore();
 
@@ -401,12 +402,20 @@ onMounted(async () => {
       ExtensionSearchAndReplace,
       ExtensionClearFormat,
       ExtensionFormatBrush,
+      ExtensionRangeSelection,
     ],
     parseOptions: {
       preserveWhitespace: true,
     },
     onUpdate: () => {
       debounceOnUpdate();
+    },
+    onCreate() {
+      if (editor.value?.isEmpty && !props.title) {
+        editorTitleRef.value.focus();
+      } else {
+        editor.value?.commands.focus();
+      }
     },
   });
 });
@@ -442,22 +451,6 @@ const currentLocale = i18n.global.locale.value as
 function onTitleInput(event: Event) {
   emit("update:title", (event.target as HTMLInputElement).value);
 }
-
-// Set focus
-const editorTitleRef = ref();
-onMounted(() => {
-  // if name is empty, it means the editor is in the creation mode
-  const urlParams = new URLSearchParams(window.location.search);
-  const name = urlParams.get("name");
-
-  if (!name) {
-    nextTick(() => {
-      editorTitleRef.value.focus();
-    });
-  } else {
-    editor.value?.commands.focus();
-  }
-});
 </script>
 
 <template>

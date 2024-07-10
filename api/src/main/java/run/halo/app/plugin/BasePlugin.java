@@ -1,10 +1,9 @@
 package run.halo.app.plugin;
 
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.pf4j.Plugin;
 import org.pf4j.PluginWrapper;
-import org.springframework.lang.NonNull;
-import org.springframework.util.Assert;
 
 /**
  * This class will be extended by all plugins and serve as the common class between a plugin and
@@ -13,20 +12,14 @@ import org.springframework.util.Assert;
  * @author guqing
  * @since 2.0.0
  */
+@Getter
 @Slf4j
 public class BasePlugin extends Plugin {
 
     protected PluginContext context;
 
-    @Deprecated
-    public BasePlugin(PluginWrapper wrapper) {
-        super(wrapper);
-        log.info("Initialized plugin {}", wrapper.getPluginId());
-    }
-
     /**
      * Constructor a plugin with the given plugin context.
-     * TODO Mark {@link PluginContext} as final to prevent modification.
      *
      * @param pluginContext plugin context must not be null.
      */
@@ -34,28 +27,15 @@ public class BasePlugin extends Plugin {
         this.context = pluginContext;
     }
 
-    /**
-     * use {@link #BasePlugin(PluginContext)} instead of.
-     *
-     * @deprecated since 2.10.0
-     */
+    @Deprecated(since = "2.7.0", forRemoval = true)
+    public BasePlugin(PluginWrapper wrapper) {
+        super(wrapper);
+        log.warn("Deprecated constructor 'BasePlugin(PluginWrapper wrapper)' called, please use "
+                + "'BasePlugin(PluginContext pluginContext)' instead for plugin '{}',This "
+                + "constructor will be removed in 2.19.0",
+            wrapper.getPluginId());
+    }
+
     public BasePlugin() {
-    }
-
-    /**
-     * Compatible with old constructors, if the plugin is not use
-     * {@link #BasePlugin(PluginContext)} constructor then base plugin factory will use this
-     * method to set plugin context.
-     *
-     * @param context plugin context must not be null.
-     */
-    final void setContext(PluginContext context) {
-        Assert.notNull(context, "Plugin context must not be null");
-        this.context = context;
-    }
-
-    @NonNull
-    public PluginContext getContext() {
-        return context;
     }
 }

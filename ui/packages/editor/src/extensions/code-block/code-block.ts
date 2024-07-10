@@ -1,12 +1,7 @@
-import {
-  Editor,
-  type Range,
-  type CommandProps,
-  isActive,
-  findParentNode,
-  VueNodeViewRenderer,
-  isNodeActive,
-} from "@/tiptap/vue-3";
+import MdiDeleteForeverOutline from "@/components/icon/MdiDeleteForeverOutline.vue";
+import ToolbarItem from "@/components/toolbar/ToolbarItem.vue";
+import ToolboxItem from "@/components/toolbox/ToolboxItem.vue";
+import { i18n } from "@/locales";
 import {
   EditorState,
   Plugin,
@@ -14,16 +9,21 @@ import {
   TextSelection,
   type Transaction,
 } from "@/tiptap/pm";
-import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
-import type { CodeBlockLowlightOptions } from "@tiptap/extension-code-block-lowlight";
-import CodeBlockViewRenderer from "./CodeBlockViewRenderer.vue";
-import ToolbarItem from "@/components/toolbar/ToolbarItem.vue";
-import MdiCodeBracesBox from "~icons/mdi/code-braces-box";
-import { markRaw } from "vue";
-import { i18n } from "@/locales";
-import ToolboxItem from "@/components/toolbox/ToolboxItem.vue";
-import MdiDeleteForeverOutline from "@/components/icon/MdiDeleteForeverOutline.vue";
+import {
+  Editor,
+  VueNodeViewRenderer,
+  findParentNode,
+  isActive,
+  isNodeActive,
+  type CommandProps,
+  type Range,
+} from "@/tiptap/vue-3";
 import { deleteNode } from "@/utils";
+import type { CodeBlockLowlightOptions } from "@tiptap/extension-code-block-lowlight";
+import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
+import { markRaw } from "vue";
+import MdiCodeBracesBox from "~icons/mdi/code-braces-box";
+import CodeBlockViewRenderer from "./CodeBlockViewRenderer.vue";
 
 export interface CustomCodeBlockLowlightOptions
   extends CodeBlockLowlightOptions {
@@ -50,7 +50,7 @@ const updateIndent = (tr: Transaction, type: IndentType): Transaction => {
   const { from, to } = selection;
   doc.nodesBetween(from, to, (node, pos) => {
     if (from - to == 0 && type === "indent") {
-      tr.insertText("\t", from, to);
+      tr.insertText("  ", from, to);
       return false;
     }
 
@@ -60,17 +60,17 @@ const updateIndent = (tr: Transaction, type: IndentType): Transaction => {
       precedeLineBreakPos === -1 ? pos + 1 : pos + precedeLineBreakPos + 1;
     const text = doc.textBetween(startBetWeenIndex, to, "\n");
     if (type === "indent") {
-      let replacedStr = text.replace(/\n/g, "\n\t");
+      let replacedStr = text.replace(/\n/g, "\n  ");
       if (startBetWeenIndex === pos + 1) {
-        replacedStr = "\t" + replacedStr;
+        replacedStr = "  " + replacedStr;
       }
       tr.insertText(replacedStr, startBetWeenIndex, to);
     } else {
-      let replacedStr = text.replace(/\n\t/g, "\n");
+      let replacedStr = text.replace(/\n {2}/g, "\n");
       if (startBetWeenIndex === pos + 1) {
-        const firstNewLineIndex = replacedStr.indexOf("\t");
+        const firstNewLineIndex = replacedStr.indexOf("  ");
         if (firstNewLineIndex == 0) {
-          replacedStr = replacedStr.replace("\t", "");
+          replacedStr = replacedStr.replace("  ", "");
         }
       }
       tr.insertText(replacedStr, startBetWeenIndex, to);
@@ -100,6 +100,30 @@ const getRenderContainer = (node: HTMLElement) => {
 export default CodeBlockLowlight.extend<
   CustomCodeBlockLowlightOptions & CodeBlockLowlightOptions
 >({
+  allowGapCursor: true,
+  // It needs to have a higher priority than range-selection,
+  // otherwise the Mod-a shortcut key will be overridden.
+  priority: 110,
+  fakeSelection: true,
+
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      collapsed: {
+        default: false,
+        parseHTML: (element) => !!element.getAttribute("collapsed"),
+        renderHTML: (attributes) => {
+          if (attributes.collapsed) {
+            return {
+              collapsed: attributes.collapsed,
+            };
+          }
+          return {};
+        },
+      },
+    };
+  },
+
   addCommands() {
     return {
       ...this.parent?.(),
@@ -205,7 +229,7 @@ export default CodeBlockLowlight.extend<
             editor,
             isActive: editor.isActive("codeBlock"),
             icon: markRaw(MdiCodeBracesBox),
-            title: i18n.global.t("editor.common.codeblock"),
+            title: i18n.global.t("editor.common.codeblock.title"),
             action: () => editor.chain().focus().toggleCodeBlock().run(),
           },
         };
@@ -214,7 +238,7 @@ export default CodeBlockLowlight.extend<
         return {
           priority: 80,
           icon: markRaw(MdiCodeBracesBox),
-          title: "editor.common.codeblock",
+          title: "editor.common.codeblock.title",
           keywords: ["codeblock", "daimakuai"],
           command: ({ editor, range }: { editor: Editor; range: Range }) => {
             editor.chain().focus().deleteRange(range).setCodeBlock().run();
@@ -229,7 +253,7 @@ export default CodeBlockLowlight.extend<
             props: {
               editor,
               icon: markRaw(MdiCodeBracesBox),
-              title: i18n.global.t("editor.common.codeblock"),
+              title: i18n.global.t("editor.common.codeblock.title"),
               action: () => {
                 editor.chain().focus().setCodeBlock().run();
               },
