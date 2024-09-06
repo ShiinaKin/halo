@@ -876,6 +876,8 @@ core:
       remote_download:
         title: 检测到了远程下载地址，是否需要下载？
         description: 请仔细鉴别此地址是否可信：{url}
+      reload_window:
+        button: 需要重载页面
     filters:
       status:
         items:
@@ -1333,7 +1335,6 @@ core:
       os: 操作系统：{os}
     alert:
       external_url_invalid: 检测到外部访问地址与当前访问地址不一致，可能会导致部分链接无法正常跳转，请检查外部访问地址设置。
-      h2_warning: H2 数据库仅用于开发环境和测试环境，不推荐在生产环境中使用 H2 数据库。如果必须要使用，请按时进行数据备份。
   backup:
     title: 备份与恢复
     tabs:
@@ -1360,7 +1361,8 @@ core:
         button: 下载并恢复
       restore_by_backup:
         button: 恢复
-        title: 从此备份进行恢复
+        title: 从备份文件恢复
+        description: 点击确定后，将从备份文件 {filename} 恢复数据。
     list:
       phases:
         pending: 准备中
@@ -1384,7 +1386,7 @@ core:
           fields:
             url: 下载地址
         backup:
-          label: 从备份恢复
+          label: 从备份文件恢复
   exception:
     not_found:
       message: 没有找到该页面
@@ -1608,10 +1610,15 @@ core:
         aspect_ratio_square: 裁剪为正方形
         aspect_ratio_landscape: 裁剪为横向 (16:9)
         aspect_ratio_portrait: 裁剪为纵向 (9:16)
+    h2_warning_alert:
+      title: 警告：正在使用 H2 数据库
+      description: H2 数据库仅适用于开发环境和测试环境，不推荐在生产环境中使用，H2 非常容易因为操作不当导致数据文件损坏。如果必须要使用，请按时进行数据备份。
   composables:
     content_cache:
       toast_recovered: 已从缓存中恢复未保存的内容
   formkit:
+    select:
+      no_data: 暂无数据
     category_select:
       creation_label: 创建 {text} 分类
     tag_select:
@@ -1640,6 +1647,10 @@ core:
         fields:
           description: 备注
           string_data: 字符串数据
+    code:
+      fullscreen:
+        exit: 退出全屏
+        enter: 全屏编辑
   common:
     buttons:
       save: 保存
@@ -1683,6 +1694,7 @@ core:
       revoke: 撤销
       disable: 禁用
       enable: 启用
+      continue: 继续
     radio:
       "yes": 是
       "no": 否

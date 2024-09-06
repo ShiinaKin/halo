@@ -856,6 +856,8 @@ core:
       remote_download:
         title: 偵測到遠端下載地址，是否需要下載？
         description: 請仔細鑑別此地址是否可信：{url}
+      reload_window:
+        button: 需要重載頁面
     filters:
       status:
         items:
@@ -1312,9 +1314,6 @@ core:
       os: 操作系統：{os}
     alert:
       external_url_invalid: 檢測到外部訪問地址與當前訪問地址不一致，可能會導致部分連結無法正常跳轉，請檢查外部訪問地址設置。
-      h2_warning: |-
-        H2 資料庫僅用於開發環境和測試環境，不建議在生產環境中使用 H2 資料庫。
-        如果必須要使用，請按時進行資料備份。
   backup:
     title: 備份與還原
     tabs:
@@ -1341,7 +1340,8 @@ core:
         button: 下載並還原
       restore_by_backup:
         button: 還原
-        title: 確認要從此備份進行還原嗎？
+        title: 從備份檔案恢復
+        description: 點選確定後，將從備份檔案 {filename} 還原資料。
     list:
       phases:
         pending: 準備中
@@ -1365,7 +1365,7 @@ core:
           fields:
             url: 下載地址
         backup:
-          label: 從備份還原
+          label: 從備份檔案恢復
   exception:
     not_found:
       message: 沒有找到該頁面
@@ -1565,10 +1565,17 @@ core:
         aspect_ratio_square: 裁剪為正方形
         aspect_ratio_landscape: 裁剪為橫向 (16:9)
         aspect_ratio_portrait: 裁剪為縱向 (9:16)
+    h2_warning_alert:
+      title: 警告：正在使用 H2 資料庫
+      description: >-
+        H2 資料庫僅適用於開發環境和測試環境，不建議在生產環境中使用，H2
+        非常容易因為操作不當而導致資料檔案損壞。如果必須要使用，請按時進行資料備份。
   composables:
     content_cache:
       toast_recovered: 已從緩存中恢復未保存的內容
   formkit:
+    select:
+      no_data: 暫無數據
     category_select:
       creation_label: 創建 {text} 分類
     tag_select:
@@ -1597,6 +1604,10 @@ core:
         fields:
           description: 備註
           string_data: 字符串數據
+    code:
+      fullscreen:
+        exit: 退出全屏
+        enter: 全屏编辑
   common:
     buttons:
       save: 保存
@@ -1640,6 +1651,7 @@ core:
       revoke: 撤銷
       disable: 禁用
       enable: 启用
+      continue: 繼續
     radio:
       "yes": 是
       "no": 否

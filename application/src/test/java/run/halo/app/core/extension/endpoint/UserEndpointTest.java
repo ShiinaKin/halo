@@ -11,9 +11,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.csrf;
-import static org.springframework.test.web.reactive.server.WebTestClient.bindToRouterFunction;
-import static run.halo.app.extension.GroupVersionKind.fromExtension;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.mockUser;
+import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.springSecurity;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -24,19 +23,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
-import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.function.BodyInserters;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import run.halo.app.core.extension.Role;
-import run.halo.app.core.extension.RoleBinding;
 import run.halo.app.core.extension.User;
 import run.halo.app.core.extension.attachment.Attachment;
 import run.halo.app.core.extension.service.AttachmentService;
@@ -46,14 +43,12 @@ import run.halo.app.extension.ListResult;
 import run.halo.app.extension.Metadata;
 import run.halo.app.extension.PageRequest;
 import run.halo.app.extension.ReactiveExtensionClient;
-import run.halo.app.extension.exception.ExtensionNotFoundException;
 import run.halo.app.infra.SystemConfigurableEnvironmentFetcher;
 import run.halo.app.infra.SystemSetting;
+import run.halo.app.infra.exception.UserNotFoundException;
 import run.halo.app.infra.utils.JsonUtils;
 
-@SpringBootTest
-@AutoConfigureWebTestClient
-@WithMockUser(username = "fake-user", password = "fake-password", roles = "fake-super-role")
+@ExtendWith(MockitoExtension.class)
 class UserEndpointTest {
 
     WebTestClient webClient;
@@ -78,9 +73,10 @@ class UserEndpointTest {
 
     @BeforeEach
     void setUp() {
-        // disable authorization
-        webClient = WebTestClient.bindToRouterFunction(endpoint.endpoint()).build()
-            .mutateWith(csrf());
+        webClient = WebTestClient.bindToRouterFunction(endpoint.endpoint())
+            .apply(springSecurity())
+            .build()
+            .mutateWith(mockUser("fake-user").password("fake-password").roles("fake-super-role"));
     }
 
     @Nested
@@ -88,12 +84,12 @@ class UserEndpointTest {
 
         @Test
         void shouldListEmptyUsersWhenNoUsers() {
+            when(roleService.getRolesByUsernames(any())).thenReturn(Mono.just(Map.of()));
+            when(roleService.list(any())).thenReturn(Flux.empty());
             when(client.listBy(same(User.class), any(), any(PageRequest.class)))
                 .thenReturn(Mono.just(ListResult.emptyResult()));
 
-            bindToRouterFunction(endpoint.endpoint())
-                .build()
-                .get().uri("/users")
+            webClient.get().uri("/users")
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody()
@@ -109,13 +105,12 @@ class UserEndpointTest {
                 createUser("fake-user-3")
             );
             var expectResult = new ListResult<>(users);
+            when(roleService.getRolesByUsernames(any())).thenReturn(Mono.just(Map.of()));
             when(roleService.list(anySet())).thenReturn(Flux.empty());
             when(client.listBy(same(User.class), any(), any(PageRequest.class)))
                 .thenReturn(Mono.just(expectResult));
 
-            bindToRouterFunction(endpoint.endpoint())
-                .build()
-                .get().uri("/users")
+            webClient.get().uri("/users")
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody()
@@ -144,11 +139,10 @@ class UserEndpointTest {
             var expectResult = new ListResult<>(users);
             when(client.listBy(same(User.class), any(), any(PageRequest.class)))
                 .thenReturn(Mono.just(expectResult));
+            when(roleService.getRolesByUsernames(any())).thenReturn(Mono.just(Map.of()));
             when(roleService.list(anySet())).thenReturn(Flux.empty());
 
-            bindToRouterFunction(endpoint.endpoint())
-                .build()
-                .get().uri("/users?role=guest")
+            webClient.get().uri("/users?role=guest")
                 .exchange()
                 .expectStatus().isOk();
         }
@@ -160,11 +154,10 @@ class UserEndpointTest {
             var expectResult = new ListResult<>(List.of(expectUser));
             when(client.listBy(same(User.class), any(), any(PageRequest.class)))
                 .thenReturn(Mono.just(expectResult));
+            when(roleService.getRolesByUsernames(any())).thenReturn(Mono.just(Map.of()));
             when(roleService.list(anySet())).thenReturn(Flux.empty());
 
-            bindToRouterFunction(endpoint.endpoint())
-                .build()
-                .get().uri("/users?sort=creationTimestamp,desc")
+            webClient.get().uri("/users?sort=creationTimestamp,desc")
                 .exchange()
                 .expectStatus().isOk();
         }
@@ -185,16 +178,6 @@ class UserEndpointTest {
             return user;
         }
 
-        User createUser(String name, Instant creationTimestamp) {
-            var metadata = new Metadata();
-            metadata.setName(name);
-            metadata.setCreationTimestamp(creationTimestamp);
-            var spec = new User.UserSpec();
-            var user = new User();
-            user.setMetadata(metadata);
-            user.setSpec(spec);
-            return user;
-        }
     }
 
     @Nested
@@ -204,8 +187,7 @@ class UserEndpointTest {
         @Test
         void shouldResponseErrorIfUserNotFound() {
             when(userService.getUser("fake-user"))
-                .thenReturn(Mono.error(
-                    new ExtensionNotFoundException(fromExtension(User.class), "fake-user")));
+                .thenReturn(Mono.error(new UserNotFoundException("fake-user")));
             webClient.get().uri("/users/-")
                 .exchange()
                 .expectStatus().isNotFound();
@@ -219,22 +201,18 @@ class UserEndpointTest {
             metadata.setName("fake-user");
             var user = new User();
             user.setMetadata(metadata);
-            Map<String, String> annotations =
-                Map.of(User.ROLE_NAMES_ANNO, JsonUtils.objectToJson(Set.of("role-A")));
-            user.getMetadata().setAnnotations(annotations);
             when(userService.getUser("fake-user")).thenReturn(Mono.just(user));
             Role role = new Role();
             role.setMetadata(new Metadata());
-            role.getMetadata().setName("role-A");
+            role.getMetadata().setName("fake-super-role");
             role.setRules(List.of());
-            when(roleService.list(anySet())).thenReturn(Flux.just(role));
+            when(roleService.list(Set.of("fake-super-role"), true)).thenReturn(Flux.just(role));
             webClient.get().uri("/users/-")
                 .exchange()
                 .expectStatus().isOk()
                 .expectHeader().contentType(MediaType.APPLICATION_JSON)
                 .expectBody(UserEndpoint.DetailedUser.class)
                 .isEqualTo(new UserEndpoint.DetailedUser(user, List.of(role)));
-            verify(roleService).list(eq(Set.of("role-A")));
         }
     }
 
@@ -265,11 +243,9 @@ class UserEndpointTest {
         @Test
         void shouldGetErrorIfUsernameMismatch() {
             var currentUser = createUser("fake-user");
-            var updatedUser = createUser("fake-user");
             var requestUser = createUser("another-fake-user");
 
             when(client.get(User.class, "fake-user")).thenReturn(Mono.just(currentUser));
-            when(client.update(currentUser)).thenReturn(Mono.just(updatedUser));
 
             webClient.put().uri("/users/-")
                 .bodyValue(requestUser)
@@ -322,8 +298,6 @@ class UserEndpointTest {
         @Test
         void shouldUpdateOtherPasswordCorrectly() {
             var user = new User();
-            when(userService.confirmPassword("another-fake-user", "old-password"))
-                .thenReturn(Mono.just(true));
             when(userService.updateWithRawPassword("another-fake-user", "new-password"))
                 .thenReturn(Mono.just(user));
             webClient.put()
@@ -344,14 +318,6 @@ class UserEndpointTest {
     @Nested
     @DisplayName("GrantPermission")
     class GrantPermissionEndpointTest {
-
-        @BeforeEach
-        void setUp() {
-            when(client.list(same(RoleBinding.class), any(), any())).thenReturn(Flux.empty());
-            when(client.get(User.class, "fake-user"))
-                .thenReturn(Mono.error(
-                    new ExtensionNotFoundException(fromExtension(User.class), "fake-user")));
-        }
 
         @Test
         void shouldGetBadRequestIfRequestBodyIsEmpty() {
@@ -385,16 +351,16 @@ class UserEndpointTest {
                     "metadata": {
                         "name": "test-A",
                         "annotations": {
-                            "rbac.authorization.halo.run/ui-permissions": "[\\"permission-A\\"]"
+                            "rbac.authorization.halo.run/ui-permissions": \
+                            "[\\"permission-A\\", \\"permission-A\\"]"
                         }
                     },
                     "rules": []
                 }
                 """, Role.class);
             when(roleService.listPermissions(eq(Set.of("test-A")))).thenReturn(Flux.just(roleA));
-            when(userService.listRoles(eq("fake-user"))).thenReturn(
-                Flux.fromIterable(List.of(roleA)));
-            when(roleService.listDependenciesFlux(anySet())).thenReturn(Flux.just(roleA));
+            when(roleService.getRolesByUsername("fake-user")).thenReturn(Flux.just("test-A"));
+            when(roleService.list(Set.of("test-A"), true)).thenReturn(Flux.just(roleA));
 
             webClient.get().uri("/users/fake-user/permissions")
                 .exchange()
@@ -402,20 +368,16 @@ class UserEndpointTest {
                 .isOk()
                 .expectBody(UserEndpoint.UserPermission.class)
                 .value(userPermission -> {
-                    assertEquals(Set.of(roleA), userPermission.getRoles());
+                    assertEquals(List.of(roleA), userPermission.getRoles());
                     assertEquals(List.of(roleA), userPermission.getPermissions());
-                    assertEquals(Set.of("permission-A"), userPermission.getUiPermissions());
+                    assertEquals(List.of("permission-A"), userPermission.getUiPermissions());
                 });
-
-            verify(userService, times(1)).listRoles(eq("fake-user"));
         }
     }
 
     @Test
     void createWhenNameDuplicate() {
         when(userService.createUser(any(User.class), anySet()))
-            .thenReturn(Mono.just(new User()));
-        when(userService.updateWithRawPassword(anyString(), anyString()))
             .thenReturn(Mono.just(new User()));
         var userRequest = new UserEndpoint.CreateUserRequest("fake-user",
             "fake-email",

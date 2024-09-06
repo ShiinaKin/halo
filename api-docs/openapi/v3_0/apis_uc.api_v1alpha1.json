@@ -2,7 +2,7 @@
   "openapi": "3.0.1",
   "info": {
     "title": "Halo",
-    "version": "2.18.0-SNAPSHOT"
+    "version": "2.20.0-SNAPSHOT"
   },
   "servers": [
     {
@@ -39,6 +39,47 @@
               }
             }
           }
+        },
+        "responses": {
+          "default": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                }
+              }
+            },
+            "description": "default response"
+          }
+        },
+        "tags": [
+          "AttachmentV1alpha1Uc"
+        ]
+      }
+    },
+    "/apis/uc.api.content.halo.run/v1alpha1/attachments/-/upload-from-url": {
+      "post": {
+        "description": "Upload attachment from the given URL.",
+        "operationId": "ExternalTransferAttachment",
+        "parameters": [
+          {
+            "description": "Wait for permalink.",
+            "in": "query",
+            "name": "waitForPermalink",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadFromUrlRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "default": {
@@ -893,6 +934,12 @@
           "permalink": {
             "type": "string",
             "description": "Permalink of attachment.\nIf it is in local storage, the public URL will be set.\nIf it is in s3 storage, the Object URL will be set.\n"
+          },
+          "thumbnails": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         }
       },
@@ -1940,6 +1987,21 @@
           },
           "totpConfigured": {
             "type": "boolean"
+          }
+        }
+      },
+      "UploadFromUrlRequest": {
+        "required": [
+          "url"
+        ],
+        "type": "object",
+        "properties": {
+          "filename": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "url"
           }
         }
       },

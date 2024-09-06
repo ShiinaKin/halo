@@ -940,6 +940,8 @@ core:
       remote_download:
         title: Remote download address detected, do you want to download?
         description: "Please carefully verify whether this address can be trusted: {url}"
+      reload_window:
+        button: Reload required
     filters:
       status:
         items:
@@ -1250,8 +1252,12 @@ core:
                 qrcode:
                   label: "Use the validator application to scan the QR code below:"
                 manual:
-                  label: "If you can't scan the QR code, click to view the alternative steps."
-                  help: "Manually configure the validator application with the following code:"
+                  label: >-
+                    If you can't scan the QR code, click to view the alternative
+                    steps.
+                  help: >-
+                    Manually configure the validator application with the
+                    following code:
     pat:
       operations:
         delete:
@@ -1422,11 +1428,6 @@ core:
         The external access url detected is inconsistent with the current access
         url, which may cause some links to fail to redirect properly. Please
         check the external access url settings.
-      h2_warning: >-
-        H2 database is only used in development and testing environments. It is
-        not recommended to use H2 database in production environment. 
-
-        If you must use it, please back up your data on time.
   backup:
     title: Backup and Restore
     tabs:
@@ -1458,7 +1459,10 @@ core:
         button: Download and restore
       restore_by_backup:
         button: Restore
-        title: Restore from this backup
+        title: Restore from backup file
+        description: >-
+          After clicking OK, data will be restored from the backup file
+          {filename}.
     list:
       phases:
         pending: Pending
@@ -1488,7 +1492,7 @@ core:
           fields:
             url: Remote URL
         backup:
-          label: Restore from backup
+          label: Restore from backup files
   exception:
     not_found:
       message: Page not found
@@ -1690,10 +1694,19 @@ core:
         aspect_ratio_square: Crop square
         aspect_ratio_landscape: Crop landscape (16:9)
         aspect_ratio_portrait: Crop portrait (9:16)
+    h2_warning_alert:
+      title: "Warning: H2 database in use"
+      description: >-
+        The H2 database is only suitable for development and testing
+        environments and is not recommended for use in production environments.
+        H2 is very easy to cause data file corruption due to improper operation.
+        If you must use it, please back up the data on time.
   composables:
     content_cache:
       toast_recovered: Recovered unsaved content from cache
   formkit:
+    select:
+      no_data: No data
     category_select:
       creation_label: Create {text} category
     tag_select:
@@ -1725,6 +1738,10 @@ core:
         fields:
           description: Description
           string_data: String Data
+    code:
+      fullscreen:
+        exit: Exit fullscreen
+        enter: Enter fullscreen to edit
   common:
     buttons:
       save: Save
@@ -1768,6 +1785,7 @@ core:
       revoke: Revoke
       disable: Disable
       enable: Enable
+      continue: Continue
     radio:
       "yes": "Yes"
       "no": "No"

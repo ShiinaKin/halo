@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.charfilter.HTMLStripCharFilterFactory;
@@ -33,6 +34,7 @@ import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DocValuesType;
+import org.apache.lucene.index.IndexNotFoundException;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.index.Term;
@@ -59,6 +61,7 @@ import org.springframework.core.convert.converter.Converter;
 import org.springframework.lang.NonNull;
 import org.springframework.util.StopWatch;
 import org.springframework.util.StringUtils;
+import reactor.core.Exceptions;
 import run.halo.app.search.HaloDocument;
 import run.halo.app.search.SearchEngine;
 import run.halo.app.search.SearchOption;
@@ -77,13 +80,11 @@ public class LuceneSearchEngine implements SearchEngine, InitializingBean, Dispo
 
     private Analyzer analyzer;
 
-    private IndexWriter indexWriter;
-
-    private SearcherManager searcherManager;
+    private volatile SearcherManager searcherManager;
 
     private Directory directory;
 
-    public LuceneSearchEngine(Path indexRootDir) throws IOException {
+    public LuceneSearchEngine(Path indexRootDir) {
         this.indexRootDir = indexRootDir;
     }
 
@@ -102,12 +103,17 @@ public class LuceneSearchEngine implements SearchEngine, InitializingBean, Dispo
             docs.add(doc);
         });
         var deleteQuery = new TermInSetQuery("id", terms);
-        try {
-            this.indexWriter.updateDocuments(deleteQuery, docs);
-            this.searcherManager.maybeRefreshBlocking();
-            this.indexWriter.commit();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+
+        var writerConfig = new IndexWriterConfig(this.analyzer)
+            .setOpenMode(CREATE_OR_APPEND);
+        synchronized (this) {
+            try (var indexWriter = new IndexWriter(this.directory, writerConfig)) {
+                indexWriter.updateDocuments(deleteQuery, docs);
+            } catch (IOException e) {
+                throw Exceptions.propagate(e);
+            } finally {
+                this.refreshSearcherManager();
+            }
         }
     }
 
@@ -116,29 +122,47 @@ public class LuceneSearchEngine implements SearchEngine, InitializingBean, Dispo
         var terms = new LinkedList<BytesRef>();
         haloDocIds.forEach(haloDocId -> terms.add(new BytesRef(haloDocId)));
         var deleteQuery = new TermInSetQuery("id", terms);
-        try {
-            this.indexWriter.deleteDocuments(deleteQuery);
-            this.searcherManager.maybeRefreshBlocking();
-            this.indexWriter.commit();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+        var writerConfig = new IndexWriterConfig(this.analyzer)
+            .setOpenMode(CREATE_OR_APPEND);
+        synchronized (this) {
+            try (var indexWriter = new IndexWriter(this.directory, writerConfig)) {
+                indexWriter.deleteDocuments(deleteQuery);
+            } catch (IOException e) {
+                throw Exceptions.propagate(e);
+            } finally {
+                this.refreshSearcherManager();
+            }
         }
     }
 
     @Override
     public void deleteAll() {
-        try {
-            this.indexWriter.deleteAll();
-            this.searcherManager.maybeRefreshBlocking();
-            this.indexWriter.commit();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+        var writerConfig = new IndexWriterConfig(this.analyzer)
+            .setOpenMode(CREATE_OR_APPEND);
+        synchronized (this) {
+            try (var indexWriter = new IndexWriter(this.directory, writerConfig)) {
+                indexWriter.deleteAll();
+            } catch (IOException e) {
+                throw Exceptions.propagate(e);
+            } finally {
+                this.refreshSearcherManager();
+            }
         }
     }
 
     @Override
     public SearchResult search(SearchOption option) {
         IndexSearcher searcher = null;
+        var sm = obtainSearcherManager();
+        if (sm.isEmpty()) {
+            // indicate the index is empty
+            var emptyResult = new SearchResult();
+            emptyResult.setKeyword(option.getKeyword());
+            emptyResult.setLimit(option.getLimit());
+            emptyResult.setTotal(0L);
+            emptyResult.setHits(List.of());
+            return emptyResult;
+        }
         try {
             searcher = searcherManager.acquire();
             var queryParser = new StandardQueryParser(analyzer);
@@ -170,6 +194,45 @@ public class LuceneSearchEngine implements SearchEngine, InitializingBean, Dispo
                     new TermQuery(new Term("published", filterPublished.toString())), FILTER
                 );
             }
+
+            Optional.ofNullable(option.getIncludeTypes())
+                .filter(types -> !types.isEmpty())
+                .ifPresent(types -> {
+                    var typeTerms = types.stream()
+                        .distinct()
+                        .map(BytesRef::new)
+                        .toList();
+                    queryBuilder.add(new TermInSetQuery("type", typeTerms), FILTER);
+                });
+
+            Optional.ofNullable(option.getIncludeOwnerNames())
+                .filter(ownerNames -> !ownerNames.isEmpty())
+                .ifPresent(ownerNames -> {
+                    var ownerTerms = ownerNames.stream()
+                        .distinct()
+                        .map(BytesRef::new)
+                        .toList();
+                    queryBuilder.add(new TermInSetQuery("ownerName", ownerTerms), FILTER);
+                });
+
+            Optional.ofNullable(option.getIncludeTagNames())
+                .filter(tagNames -> !tagNames.isEmpty())
+                .ifPresent(tagNames -> tagNames
+                    .stream()
+                    .distinct()
+                    .forEach(tagName ->
+                        queryBuilder.add(new TermQuery(new Term("tag", tagName)), FILTER)
+                    ));
+
+            Optional.ofNullable(option.getIncludeCategoryNames())
+                .filter(categoryNames -> !categoryNames.isEmpty())
+                .ifPresent(categoryNames -> categoryNames
+                    .stream()
+                    .distinct()
+                    .forEach(categoryName ->
+                        queryBuilder.add(new TermQuery(new Term("category", categoryName)), FILTER)
+                    ));
+
             var finalQuery = queryBuilder.build();
             var limit = option.getLimit();
 
@@ -230,28 +293,55 @@ public class LuceneSearchEngine implements SearchEngine, InitializingBean, Dispo
 
     @Override
     public void afterPropertiesSet() throws Exception {
-        try {
-            this.analyzer = CustomAnalyzer.builder()
-                .withTokenizer(StandardTokenizerFactory.class)
-                .addCharFilter(HTMLStripCharFilterFactory.NAME)
-                .addCharFilter(CJKWidthCharFilterFactory.NAME)
-                .addTokenFilter(LowerCaseFilterFactory.NAME)
-                .addTokenFilter(CJKWidthFilterFactory.NAME)
-                .addTokenFilter(CJKBigramFilterFactory.NAME)
-                .build();
-            this.directory = FSDirectory.open(this.indexRootDir);
-            var writerConfig = new IndexWriterConfig(this.analyzer)
-                .setOpenMode(CREATE_OR_APPEND);
-            this.indexWriter = new IndexWriter(this.directory, writerConfig);
-            this.searcherManager = new SearcherManager(this.indexWriter, null);
-            log.info("Initialized lucene search engine");
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+        this.analyzer = CustomAnalyzer.builder()
+            .withTokenizer(StandardTokenizerFactory.class)
+            .addCharFilter(HTMLStripCharFilterFactory.NAME)
+            .addCharFilter(CJKWidthCharFilterFactory.NAME)
+            .addTokenFilter(LowerCaseFilterFactory.NAME)
+            .addTokenFilter(CJKWidthFilterFactory.NAME)
+            .addTokenFilter(CJKBigramFilterFactory.NAME)
+            .build();
+        this.directory = FSDirectory.open(this.indexRootDir);
+        log.info("Initialized lucene search engine");
+    }
+
+    Optional<SearcherManager> obtainSearcherManager() {
+        if (this.searcherManager != null) {
+            return Optional.of(this.searcherManager);
+        }
+        synchronized (this) {
+            // double check
+            if (this.searcherManager != null) {
+                return Optional.of(this.searcherManager);
+            }
+            try {
+                this.searcherManager = new SearcherManager(this.directory, null);
+                return Optional.of(this.searcherManager);
+            } catch (IndexNotFoundException e) {
+                log.warn("Index not ready for creating searcher manager");
+            } catch (IOException e) {
+                log.error("Failed to create searcher manager", e);
+            }
+            return Optional.empty();
         }
     }
 
-    void setIndexWriter(IndexWriter indexWriter) {
-        this.indexWriter = indexWriter;
+    private void refreshSearcherManager() {
+        this.obtainSearcherManager().ifPresent(sm -> {
+            try {
+                sm.maybeRefreshBlocking();
+            } catch (IOException e) {
+                log.warn("Failed to refresh searcher", e);
+            }
+        });
+    }
+
+    Directory getDirectory() {
+        return directory;
+    }
+
+    Analyzer getAnalyzer() {
+        return analyzer;
     }
 
     void setDirectory(Directory directory) {
@@ -283,13 +373,13 @@ public class LuceneSearchEngine implements SearchEngine, InitializingBean, Dispo
         if (this.searcherManager != null) {
             closers.add(this.searcherManager);
         }
-        if (this.indexWriter != null) {
-            closers.add(this.indexWriter);
-        }
         if (this.directory != null) {
             closers.add(this.directory);
         }
         IOUtils.close(closers);
+        this.analyzer = null;
+        this.searcherManager = null;
+        this.directory = null;
         log.info("Destroyed lucene search engine");
     }
 
