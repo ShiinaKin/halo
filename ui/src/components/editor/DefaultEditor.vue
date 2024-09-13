@@ -32,6 +32,7 @@ import {
   ExtensionNodeSelected,
   ExtensionOrderedList,
   ExtensionPlaceholder,
+  ExtensionRangeSelection,
   ExtensionSearchAndReplace,
   ExtensionStrike,
   ExtensionSubscript,
@@ -47,8 +48,7 @@ import {
   RichTextEditor,
   ToolbarItem,
   ToolboxItem,
-  lowlight,
-  type AnyExtension,
+  type Extensions,
 } from "@halo-dev/richtext-editor";
 // ui custom extension
 import { i18n } from "@/locales";
@@ -74,7 +74,6 @@ import { OverlayScrollbarsComponent } from "overlayscrollbars-vue";
 import {
   inject,
   markRaw,
-  nextTick,
   onBeforeUnmount,
   onMounted,
   ref,
@@ -98,6 +97,7 @@ import {
   UiExtensionVideo,
 } from "./extensions";
 import { getContents } from "./utils/attachment";
+import { useExtension } from "./composables/use-extension";
 
 const { t } = useI18n();
 const { currentUserHasPermission } = usePermission();
@@ -169,6 +169,7 @@ const attachmentSelectorModal = ref(false);
 const { onAttachmentSelect, attachmentResult } = useAttachmentSelect();
 
 const editor = shallowRef<Editor>();
+const editorTitleRef = ref();
 
 const { pluginModules } = usePluginModuleStore();
 
@@ -189,8 +190,199 @@ const handleCloseAttachmentSelectorModal = () => {
   attachmentOptions.value = initAttachmentOptions;
 };
 
+const { filterDuplicateExtensions } = useExtension();
+
+const presetExtensions = [
+  ExtensionBlockquote,
+  ExtensionBold,
+  ExtensionBulletList,
+  ExtensionCode,
+  ExtensionDocument,
+  ExtensionDropcursor.configure({
+    width: 2,
+    class: "dropcursor",
+    color: "skyblue",
+  }),
+  ExtensionGapcursor,
+  ExtensionHardBreak,
+  ExtensionHeading,
+  ExtensionHistory,
+  ExtensionHorizontalRule,
+  ExtensionItalic,
+  ExtensionOrderedList,
+  ExtensionStrike,
+  ExtensionText,
+  UiExtensionImage.configure({
+    inline: true,
+    allowBase64: false,
+    HTMLAttributes: {
+      loading: "lazy",
+    },
+    uploadImage: props.uploadImage,
+  }),
+  ExtensionTaskList,
+  ExtensionLink.configure({
+    autolink: false,
+    openOnClick: false,
+  }),
+  ExtensionTextAlign.configure({
+    types: ["heading", "paragraph"],
+  }),
+  ExtensionUnderline,
+  ExtensionTable.configure({
+    resizable: true,
+  }),
+  ExtensionSubscript,
+  ExtensionSuperscript,
+  ExtensionPlaceholder.configure({
+    placeholder: t(
+      "core.components.default_editor.extensions.placeholder.options.placeholder"
+    ),
+  }),
+  ExtensionHighlight,
+  ExtensionCommands,
+  ExtensionCodeBlock,
+  ExtensionIframe,
+  UiExtensionVideo.configure({
+    uploadVideo: props.uploadImage,
+  }),
+  UiExtensionAudio.configure({
+    uploadAudio: props.uploadImage,
+  }),
+  ExtensionCharacterCount,
+  ExtensionFontSize,
+  ExtensionColor,
+  ExtensionIndent,
+  Extension.create({
+    name: "custom-heading-extension",
+    addGlobalAttributes() {
+      return [
+        {
+          types: ["heading"],
+          attributes: {
+            id: {
+              default: null,
+            },
+          },
+        },
+      ];
+    },
+  }),
+  Extension.create({
+    name: "custom-attachment-extension",
+    addOptions() {
+      // If user has no permission to view attachments, return
+      if (!currentUserHasPermission(["system:attachments:view"])) {
+        return this;
+      }
+
+      return {
+        getToolboxItems({ editor }: { editor: Editor }) {
+          return [
+            {
+              priority: 0,
+              component: markRaw(ToolboxItem),
+              props: {
+                editor,
+                icon: markRaw(IconFolder),
+                title: i18n.global.t(
+                  "core.components.default_editor.toolbox.attachment"
+                ),
+                action: () => {
+                  editor.commands.openAttachmentSelector((attachment) => {
+                    editor
+                      .chain()
+                      .focus()
+                      .insertContent(getContents(attachment))
+                      .run();
+                  });
+                  return true;
+                },
+              },
+            },
+          ];
+        },
+        getToolbarItems({ editor }: { editor: Editor }) {
+          return {
+            priority: 1000,
+            component: markRaw(ToolbarItem),
+            props: {
+              editor,
+              isActive: showSidebar.value,
+              icon: markRaw(RiLayoutRightLine),
+              title: i18n.global.t(
+                "core.components.default_editor.toolbox.show_hide_sidebar"
+              ),
+              action: () => {
+                showSidebar.value = !showSidebar.value;
+              },
+            },
+          };
+        },
+      };
+    },
+    addCommands() {
+      return {
+        openAttachmentSelector: (callback, options) => () => {
+          if (options) {
+            attachmentOptions.value = options;
+          }
+          attachmentSelectorModal.value = true;
+          attachmentResult.updateAttachment = (
+            attachments: AttachmentLike[]
+          ) => {
+            callback(attachments);
+          };
+          return true;
+        },
+      };
+    },
+  }),
+  ExtensionDraggable,
+  ExtensionColumns,
+  ExtensionColumn,
+  ExtensionNodeSelected,
+  ExtensionTrailingNode,
+  Extension.create({
+    name: "get-heading-id-extension",
+    addProseMirrorPlugins() {
+      return [
+        new Plugin({
+          key: new PluginKey("get-heading-id"),
+          props: {
+            decorations: (state) => {
+              const headings: HeadingNode[] = [];
+              const { doc } = state;
+              doc.descendants((node) => {
+                if (node.type.name === ExtensionHeading.name) {
+                  headings.push({
+                    level: node.attrs.level,
+                    text: node.textContent,
+                    id: node.attrs.id,
+                  });
+                }
+              });
+              headingNodes.value = headings;
+              if (!selectedHeadingNode.value) {
+                selectedHeadingNode.value = headings[0];
+              }
+              return DecorationSet.empty;
+            },
+          },
+        }),
+      ];
+    },
+  }),
+  ExtensionListKeymap,
+  UiExtensionUpload,
+  ExtensionSearchAndReplace,
+  ExtensionClearFormat,
+  ExtensionFormatBrush,
+  ExtensionRangeSelection,
+];
+
 onMounted(async () => {
-  const extensionsFromPlugins: AnyExtension[] = [];
+  const extensionsFromPlugins: Extensions = [];
 
   for (const pluginModule of pluginModules) {
     const callbackFunction =
@@ -213,200 +405,26 @@ onMounted(async () => {
     emit("update", html);
   }, 250);
 
+  const extensions = filterDuplicateExtensions([
+    ...presetExtensions,
+    ...extensionsFromPlugins,
+  ]);
+
   editor.value = new Editor({
     content: props.raw,
-    extensions: [
-      ExtensionBlockquote,
-      ExtensionBold,
-      ExtensionBulletList,
-      ExtensionCode,
-      ExtensionDocument,
-      ExtensionDropcursor.configure({
-        width: 2,
-        class: "dropcursor",
-        color: "skyblue",
-      }),
-      ExtensionGapcursor,
-      ExtensionHardBreak,
-      ExtensionHeading,
-      ExtensionHistory,
-      ExtensionHorizontalRule,
-      ExtensionItalic,
-      ExtensionOrderedList,
-      ExtensionStrike,
-      ExtensionText,
-      UiExtensionImage.configure({
-        inline: true,
-        allowBase64: false,
-        HTMLAttributes: {
-          loading: "lazy",
-        },
-        uploadImage: props.uploadImage,
-      }),
-      ExtensionTaskList,
-      ExtensionLink.configure({
-        autolink: false,
-        openOnClick: false,
-      }),
-      ExtensionTextAlign.configure({
-        types: ["heading", "paragraph"],
-      }),
-      ExtensionUnderline,
-      ExtensionTable.configure({
-        resizable: true,
-      }),
-      ExtensionSubscript,
-      ExtensionSuperscript,
-      ExtensionPlaceholder.configure({
-        placeholder: t(
-          "core.components.default_editor.extensions.placeholder.options.placeholder"
-        ),
-      }),
-      ExtensionHighlight,
-      ExtensionCommands,
-      ExtensionCodeBlock.configure({
-        lowlight,
-      }),
-      ExtensionIframe,
-      UiExtensionVideo.configure({
-        uploadVideo: props.uploadImage,
-      }),
-      UiExtensionAudio.configure({
-        uploadAudio: props.uploadImage,
-      }),
-      ExtensionCharacterCount,
-      ExtensionFontSize,
-      ExtensionColor,
-      ExtensionIndent,
-      ...extensionsFromPlugins,
-      Extension.create({
-        addGlobalAttributes() {
-          return [
-            {
-              types: ["heading"],
-              attributes: {
-                id: {
-                  default: null,
-                },
-              },
-            },
-          ];
-        },
-      }),
-      Extension.create({
-        addOptions() {
-          // If user has no permission to view attachments, return
-          if (!currentUserHasPermission(["system:attachments:view"])) {
-            return this;
-          }
-
-          return {
-            getToolboxItems({ editor }: { editor: Editor }) {
-              return [
-                {
-                  priority: 0,
-                  component: markRaw(ToolboxItem),
-                  props: {
-                    editor,
-                    icon: markRaw(IconFolder),
-                    title: i18n.global.t(
-                      "core.components.default_editor.toolbox.attachment"
-                    ),
-                    action: () => {
-                      editor.commands.openAttachmentSelector((attachment) => {
-                        editor
-                          .chain()
-                          .focus()
-                          .insertContent(getContents(attachment))
-                          .run();
-                      });
-                      return true;
-                    },
-                  },
-                },
-              ];
-            },
-            getToolbarItems({ editor }: { editor: Editor }) {
-              return {
-                priority: 1000,
-                component: markRaw(ToolbarItem),
-                props: {
-                  editor,
-                  isActive: showSidebar.value,
-                  icon: markRaw(RiLayoutRightLine),
-                  title: i18n.global.t(
-                    "core.components.default_editor.toolbox.show_hide_sidebar"
-                  ),
-                  action: () => {
-                    showSidebar.value = !showSidebar.value;
-                  },
-                },
-              };
-            },
-          };
-        },
-        addCommands() {
-          return {
-            openAttachmentSelector: (callback, options) => () => {
-              if (options) {
-                attachmentOptions.value = options;
-              }
-              attachmentSelectorModal.value = true;
-              attachmentResult.updateAttachment = (
-                attachments: AttachmentLike[]
-              ) => {
-                callback(attachments);
-              };
-              return true;
-            },
-          };
-        },
-      }),
-      ExtensionDraggable,
-      ExtensionColumns,
-      ExtensionColumn,
-      ExtensionNodeSelected,
-      ExtensionTrailingNode,
-      Extension.create({
-        addProseMirrorPlugins() {
-          return [
-            new Plugin({
-              key: new PluginKey("get-heading-id"),
-              props: {
-                decorations: (state) => {
-                  const headings: HeadingNode[] = [];
-                  const { doc } = state;
-                  doc.descendants((node) => {
-                    if (node.type.name === ExtensionHeading.name) {
-                      headings.push({
-                        level: node.attrs.level,
-                        text: node.textContent,
-                        id: node.attrs.id,
-                      });
-                    }
-                  });
-                  headingNodes.value = headings;
-                  if (!selectedHeadingNode.value) {
-                    selectedHeadingNode.value = headings[0];
-                  }
-                  return DecorationSet.empty;
-                },
-              },
-            }),
-          ];
-        },
-      }),
-      ExtensionListKeymap,
-      UiExtensionUpload,
-      ExtensionSearchAndReplace,
-      ExtensionClearFormat,
-      ExtensionFormatBrush,
-    ],
+    extensions,
     parseOptions: {
       preserveWhitespace: true,
     },
     onUpdate: () => {
       debounceOnUpdate();
+    },
+    onCreate() {
+      if (editor.value?.isEmpty && !props.title) {
+        editorTitleRef.value.focus();
+      } else {
+        editor.value?.commands.focus();
+      }
     },
   });
 });
@@ -443,21 +461,12 @@ function onTitleInput(event: Event) {
   emit("update:title", (event.target as HTMLInputElement).value);
 }
 
-// Set focus
-const editorTitleRef = ref();
-onMounted(() => {
-  // if name is empty, it means the editor is in the creation mode
-  const urlParams = new URLSearchParams(window.location.search);
-  const name = urlParams.get("name");
-
-  if (!name) {
-    nextTick(() => {
-      editorTitleRef.value.focus();
-    });
-  } else {
-    editor.value?.commands.focus();
+function handleFocusEditor(event) {
+  if (event.isComposing) {
+    return;
   }
-});
+  editor.value?.commands.focus("start");
+}
 </script>
 
 <template>
@@ -477,7 +486,7 @@ onMounted(() => {
           :placeholder="$t('core.components.default_editor.title_placeholder')"
           class="w-full border-x-0 !border-b border-t-0 !border-solid !border-gray-100 p-0 !py-2 text-4xl font-semibold placeholder:text-gray-300"
           @input="onTitleInput"
-          @keydown.enter="() => editor?.commands.focus('start')"
+          @keydown.enter="handleFocusEditor"
         />
       </template>
       <template v-if="showSidebar" #extra>

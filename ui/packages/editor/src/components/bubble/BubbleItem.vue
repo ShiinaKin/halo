@@ -1,6 +1,6 @@
 <script lang="ts" setup>
-import { vTooltip, Dropdown as VDropdown } from "floating-vue";
 import type { Editor } from "@/tiptap/vue-3";
+import { Dropdown as VDropdown, vTooltip } from "floating-vue";
 import { ref, type Component } from "vue";
 
 const props = withDefaults(
@@ -30,11 +30,7 @@ const handleBubbleItemClick = (editor: Editor) => {
   }
   const callback = props.action?.({ editor });
   if (typeof callback === "object") {
-    if (componentRef.value) {
-      componentRef.value = undefined;
-    } else {
-      componentRef.value = callback;
-    }
+    componentRef.value = callback;
   }
 };
 </script>
@@ -46,6 +42,7 @@ const handleBubbleItemClick = (editor: Editor) => {
     :auto-hide="true"
     :shown="!!componentRef"
     :distance="10"
+    @hide="componentRef = undefined"
   >
     <button
       v-if="visible({ editor })"

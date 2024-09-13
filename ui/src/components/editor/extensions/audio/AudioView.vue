@@ -1,11 +1,11 @@
 <script lang="ts" setup>
+import { VButton } from "@halo-dev/components";
 import type { NodeViewProps } from "@halo-dev/richtext-editor";
 import { computed, ref } from "vue";
-import type { AttachmentAttr } from "../../utils/attachment";
 import RiFileMusicLine from "~icons/ri/file-music-line";
 import { EditorLinkObtain } from "../../components";
-import { VButton } from "@halo-dev/components";
 import InlineBlockBox from "../../components/InlineBlockBox.vue";
+import type { AttachmentAttr } from "../../utils/attachment";
 
 const props = defineProps<NodeViewProps>();
 
@@ -39,8 +39,13 @@ const handleSetExternalLink = (attachment: AttachmentAttr) => {
 };
 
 const resetUpload = () => {
-  if (props.getPos()) {
-    props.updateAttributes({
+  const canUpdateAttributes = props.editor.can().updateAttributes(Audio.name, {
+    width: undefined,
+    height: undefined,
+    file: undefined,
+  });
+  if (canUpdateAttributes && props.getPos()) {
+    props.editor.commands.updateAttributes(Audio.name, {
       width: undefined,
       height: undefined,
       file: undefined,

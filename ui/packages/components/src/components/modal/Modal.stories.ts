@@ -1,10 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/vue3";
 
+import { IconArrowLeft, IconArrowRight } from "@/icons/icons";
+import { ref } from "vue";
 import { VModal } from ".";
 import { VButton } from "../button";
-import { IconArrowLeft, IconArrowRight } from "@/icons/icons";
 import { VSpace } from "../space";
-import { ref } from "vue";
 
 const meta: Meta<typeof VModal> = {
   title: "Modal",
@@ -40,7 +40,7 @@ const meta: Meta<typeof VModal> = {
         <div class="flex flex-col">
           <img class="w-full" src="https://ryanc.cc/avatar" />
           <img class="w-full" src="https://ryanc.cc/avatar" />
-          <img class="w-full" src="https://halo.run/logo" />
+          <img class="w-full" src="https://www.halo.run/logo" />
         </div>
 
         <template #footer>

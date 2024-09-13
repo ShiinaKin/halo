@@ -1,4 +1,7 @@
 <script lang="ts" setup>
+import { formatDatetime } from "@/utils/date";
+import type { ListedComment, ListedReply } from "@halo-dev/api-client";
+import { coreApiClient } from "@halo-dev/api-client";
 import {
   Dialog,
   IconReplyLine,
@@ -10,14 +13,13 @@ import {
   VStatusDot,
   VTag,
 } from "@halo-dev/components";
-import type { ListedComment, ListedReply } from "@halo-dev/api-client";
-import { formatDatetime } from "@/utils/date";
-import { apiClient } from "@/utils/api-client";
-import { computed, inject, ref, type Ref } from "vue";
-import { cloneDeep } from "lodash-es";
-import { useI18n } from "vue-i18n";
+import type { OperationItem } from "@halo-dev/console-shared";
 import { useQueryClient } from "@tanstack/vue-query";
+import { computed, inject, ref, type Ref, toRefs, markRaw } from "vue";
+import { useI18n } from "vue-i18n";
 import ReplyCreationModal from "./ReplyCreationModal.vue";
+import { useOperationItemExtensionPoint } from "@console/composables/use-operation-extension-points";
+import EntityDropdownItems from "@/components/entity/EntityDropdownItems.vue";
 
 const { t } = useI18n();
 const queryClient = useQueryClient();
@@ -33,6 +35,8 @@ const props = withDefaults(
     replies: undefined,
   }
 );
+
+const { reply } = toRefs(props);
 
 const quoteReply = computed(() => {
   const { quoteReply: replyName } = props.reply.reply.spec;
@@ -55,7 +59,7 @@ const handleDelete = async () => {
     cancelText: t("core.common.buttons.cancel"),
     onConfirm: async () => {
       try {
-        await apiClient.extension.reply.deleteContentHaloRunV1alpha1Reply({
+        await coreApiClient.content.reply.deleteReply({
           name: props.reply?.reply.metadata.name as string,
         });
 
@@ -71,13 +75,21 @@ const handleDelete = async () => {
 
 const handleApprove = async () => {
   try {
-    const replyToUpdate = cloneDeep(props.reply.reply);
-    replyToUpdate.spec.approved = true;
-    // TODO: 暂时由前端设置发布时间。see https://github.com/halo-dev/halo/pull/2746
-    replyToUpdate.spec.approvedTime = new Date().toISOString();
-    await apiClient.extension.reply.updateContentHaloRunV1alpha1Reply({
-      name: replyToUpdate.metadata.name,
-      reply: replyToUpdate,
+    await coreApiClient.content.reply.patchReply({
+      name: props.reply.reply.metadata.name,
+      jsonPatchInner: [
+        {
+          op: "add",
+          path: "/spec/approved",
+          value: true,
+        },
+        {
+          op: "add",
+          path: "/spec/approvedTime",
+          // TODO: 暂时由前端设置发布时间。see https://github.com/halo-dev/halo/pull/2746
+          value: new Date().toISOString(),
+        },
+      ],
     });
 
     Toast.success(t("core.common.toast.operation_success"));
@@ -112,6 +124,31 @@ function onReplyCreationModalClose() {
   });
   replyModal.value = false;
 }
+
+const { operationItems } = useOperationItemExtensionPoint<ListedReply>(
+  "reply:list-item:operation:create",
+  reply,
+  computed((): OperationItem<ListedReply>[] => [
+    {
+      priority: 0,
+      component: markRaw(VDropdownItem),
+      label: t("core.comment.operations.approve_reply.button"),
+      permissions: ["system:comments:manage"],
+      action: handleApprove,
+      hidden: props.reply?.reply.spec.approved,
+    },
+    {
+      priority: 10,
+      component: markRaw(VDropdownItem),
+      props: {
+        type: "danger",
+      },
+      label: t("core.common.buttons.delete"),
+      permissions: ["system:comments:manage"],
+      action: handleDelete,
+    },
+  ])
+);
 </script>
 
 <template>
@@ -207,20 +244,7 @@ function onReplyCreationModalClose() {
       </VEntityField>
     </template>
     <template #dropdownItems>
-      <VDropdownItem
-        v-if="!reply?.reply.spec.approved"
-        v-permission="['system:comments:manage']"
-        @click="handleApprove"
-      >
-        {{ $t("core.comment.operations.approve_reply.button") }}
-      </VDropdownItem>
-      <VDropdownItem
-        v-permission="['system:comments:manage']"
-        type="danger"
-        @click="handleDelete"
-      >
-        {{ $t("core.common.buttons.delete") }}
-      </VDropdownItem>
+      <EntityDropdownItems :dropdown-items="operationItems" :item="reply" />
     </template>
   </VEntity>
 </template>

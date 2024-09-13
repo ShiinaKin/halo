@@ -1,12 +1,7 @@
-import {
-  Editor,
-  type Range,
-  type CommandProps,
-  isActive,
-  findParentNode,
-  VueNodeViewRenderer,
-  isNodeActive,
-} from "@/tiptap/vue-3";
+import MdiDeleteForeverOutline from "@/components/icon/MdiDeleteForeverOutline.vue";
+import ToolbarItem from "@/components/toolbar/ToolbarItem.vue";
+import ToolboxItem from "@/components/toolbox/ToolboxItem.vue";
+import { i18n } from "@/locales";
 import {
   EditorState,
   Plugin,
@@ -14,22 +9,20 @@ import {
   TextSelection,
   type Transaction,
 } from "@/tiptap/pm";
-import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
-import type { CodeBlockLowlightOptions } from "@tiptap/extension-code-block-lowlight";
-import CodeBlockViewRenderer from "./CodeBlockViewRenderer.vue";
-import ToolbarItem from "@/components/toolbar/ToolbarItem.vue";
-import MdiCodeBracesBox from "~icons/mdi/code-braces-box";
-import { markRaw } from "vue";
-import { i18n } from "@/locales";
-import ToolboxItem from "@/components/toolbox/ToolboxItem.vue";
-import MdiDeleteForeverOutline from "@/components/icon/MdiDeleteForeverOutline.vue";
+import {
+  Editor,
+  VueNodeViewRenderer,
+  findParentNode,
+  isActive,
+  isNodeActive,
+  type CommandProps,
+  type Range,
+} from "@/tiptap/vue-3";
 import { deleteNode } from "@/utils";
-
-export interface CustomCodeBlockLowlightOptions
-  extends CodeBlockLowlightOptions {
-  lowlight: any;
-  defaultLanguage: string | null | undefined;
-}
+import { markRaw } from "vue";
+import MdiCodeBracesBox from "~icons/mdi/code-braces-box";
+import CodeBlockViewRenderer from "./CodeBlockViewRenderer.vue";
+import TiptapCodeBlock from "@tiptap/extension-code-block";
 
 declare module "@/tiptap" {
   interface Commands<ReturnType> {
@@ -50,7 +43,7 @@ const updateIndent = (tr: Transaction, type: IndentType): Transaction => {
   const { from, to } = selection;
   doc.nodesBetween(from, to, (node, pos) => {
     if (from - to == 0 && type === "indent") {
-      tr.insertText("\t", from, to);
+      tr.insertText("  ", from, to);
       return false;
     }
 
@@ -60,17 +53,17 @@ const updateIndent = (tr: Transaction, type: IndentType): Transaction => {
       precedeLineBreakPos === -1 ? pos + 1 : pos + precedeLineBreakPos + 1;
     const text = doc.textBetween(startBetWeenIndex, to, "\n");
     if (type === "indent") {
-      let replacedStr = text.replace(/\n/g, "\n\t");
+      let replacedStr = text.replace(/\n/g, "\n  ");
       if (startBetWeenIndex === pos + 1) {
-        replacedStr = "\t" + replacedStr;
+        replacedStr = "  " + replacedStr;
       }
       tr.insertText(replacedStr, startBetWeenIndex, to);
     } else {
-      let replacedStr = text.replace(/\n\t/g, "\n");
+      let replacedStr = text.replace(/\n {2}/g, "\n");
       if (startBetWeenIndex === pos + 1) {
-        const firstNewLineIndex = replacedStr.indexOf("\t");
+        const firstNewLineIndex = replacedStr.indexOf("  ");
         if (firstNewLineIndex == 0) {
-          replacedStr = replacedStr.replace("\t", "");
+          replacedStr = replacedStr.replace("  ", "");
         }
       }
       tr.insertText(replacedStr, startBetWeenIndex, to);
@@ -97,9 +90,109 @@ const getRenderContainer = (node: HTMLElement) => {
   return container;
 };
 
-export default CodeBlockLowlight.extend<
-  CustomCodeBlockLowlightOptions & CodeBlockLowlightOptions
->({
+export interface Option {
+  label: string;
+  value: string;
+}
+
+export interface CodeBlockOptions {
+  /**
+   * Define whether the node should be exited on triple enter.
+   * @default true
+   */
+  exitOnTripleEnter: boolean;
+  /**
+   * Define whether the node should be exited on arrow down if there is no node after it.
+   * @default true
+   */
+  exitOnArrowDown: boolean;
+  /**
+   * Custom HTML attributes that should be added to the rendered HTML tag.
+   * @default {}
+   * @example { class: 'foo' }
+   */
+  HTMLAttributes: Record<string, any>;
+
+  /**
+   * The default language for code block
+   * @default null
+   */
+  defaultLanguage: string | null | undefined;
+
+  /**
+   * The default theme for code block
+   * @default null
+   */
+  defaultTheme: string | null | undefined;
+}
+
+export interface ExtensionCodeBlockOptions extends CodeBlockOptions {
+  /**
+   * Used for language list
+   *
+   * @default []
+   */
+  languages:
+    | Array<Option>
+    | ((state: EditorState) => Array<{
+        label: string;
+        value: string;
+      }>);
+
+  /**
+   * Used for theme list
+   *
+   * @default []
+   */
+  themes?:
+    | Array<{
+        label: string;
+        value: string;
+      }>
+    | ((state: EditorState) => Array<{
+        label: string;
+        value: string;
+      }>);
+}
+
+export default TiptapCodeBlock.extend<ExtensionCodeBlockOptions>({
+  allowGapCursor: true,
+  // It needs to have a higher priority than range-selection,
+  // otherwise the Mod-a shortcut key will be overridden.
+  priority: 110,
+
+  fakeSelection: true,
+
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      collapsed: {
+        default: false,
+        parseHTML: (element) => !!element.getAttribute("collapsed"),
+        renderHTML: (attributes) => {
+          if (attributes.collapsed) {
+            return {
+              collapsed: attributes.collapsed,
+            };
+          }
+          return {};
+        },
+      },
+      theme: {
+        default: this.options.defaultTheme,
+        parseHTML: (element) => element.getAttribute("theme") || null,
+        renderHTML: (attributes) => {
+          if (attributes.theme) {
+            return {
+              theme: attributes.theme,
+            };
+          }
+          return {};
+        },
+      },
+    };
+  },
+
   addCommands() {
     return {
       ...this.parent?.(),
@@ -173,7 +266,7 @@ export default CodeBlockLowlight.extend<
         if (this.editor.isActive("codeBlock")) {
           const { tr, selection } = this.editor.state;
           const codeBlack = findParentNode(
-            (node) => node.type.name === CodeBlockLowlight.name
+            (node) => node.type.name === TiptapCodeBlock.name
           )(selection);
           if (!codeBlack) {
             return false;
@@ -194,9 +287,14 @@ export default CodeBlockLowlight.extend<
   addNodeView() {
     return VueNodeViewRenderer(CodeBlockViewRenderer);
   },
+
   addOptions() {
     return {
       ...this.parent?.(),
+      languages: [],
+      themes: [],
+      defaultLanguage: null,
+      defaultTheme: null,
       getToolbarItems({ editor }: { editor: Editor }) {
         return {
           priority: 160,
@@ -205,7 +303,7 @@ export default CodeBlockLowlight.extend<
             editor,
             isActive: editor.isActive("codeBlock"),
             icon: markRaw(MdiCodeBracesBox),
-            title: i18n.global.t("editor.common.codeblock"),
+            title: i18n.global.t("editor.common.codeblock.title"),
             action: () => editor.chain().focus().toggleCodeBlock().run(),
           },
         };
@@ -214,7 +312,7 @@ export default CodeBlockLowlight.extend<
         return {
           priority: 80,
           icon: markRaw(MdiCodeBracesBox),
-          title: "editor.common.codeblock",
+          title: "editor.common.codeblock.title",
           keywords: ["codeblock", "daimakuai"],
           command: ({ editor, range }: { editor: Editor; range: Range }) => {
             editor.chain().focus().deleteRange(range).setCodeBlock().run();
@@ -229,7 +327,7 @@ export default CodeBlockLowlight.extend<
             props: {
               editor,
               icon: markRaw(MdiCodeBracesBox),
-              title: i18n.global.t("editor.common.codeblock"),
+              title: i18n.global.t("editor.common.codeblock.title"),
               action: () => {
                 editor.chain().focus().setCodeBlock().run();
               },
@@ -241,7 +339,7 @@ export default CodeBlockLowlight.extend<
         return {
           pluginKey: "codeBlockBubbleMenu",
           shouldShow: ({ state }: { state: EditorState }) => {
-            return isActive(state, CodeBlockLowlight.name);
+            return isActive(state, TiptapCodeBlock.name);
           },
           getRenderContainer: (node: HTMLElement) => {
             return getRenderContainer(node);
@@ -253,7 +351,7 @@ export default CodeBlockLowlight.extend<
                 icon: markRaw(MdiDeleteForeverOutline),
                 title: i18n.global.t("editor.common.button.delete"),
                 action: ({ editor }: { editor: Editor }) =>
-                  deleteNode(CodeBlockLowlight.name, editor),
+                  deleteNode(TiptapCodeBlock.name, editor),
               },
             },
           ],

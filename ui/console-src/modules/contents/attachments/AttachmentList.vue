@@ -1,9 +1,9 @@
 <script lang="ts" setup>
 import UserFilterDropdown from "@/components/filter/UserFilterDropdown.vue";
 import LazyImage from "@/components/image/LazyImage.vue";
-import { apiClient } from "@/utils/api-client";
 import { isImage } from "@/utils/image";
 import type { Attachment, Group } from "@halo-dev/api-client";
+import { coreApiClient } from "@halo-dev/api-client";
 import {
   IconArrowLeft,
   IconArrowRight,
@@ -27,7 +27,6 @@ import {
 } from "@halo-dev/components";
 import { useLocalStorage } from "@vueuse/core";
 import { useRouteQuery } from "@vueuse/router";
-import { cloneDeep } from "lodash-es";
 import type { Ref } from "vue";
 import { computed, onMounted, provide, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -36,9 +35,12 @@ import AttachmentGroupList from "./components/AttachmentGroupList.vue";
 import AttachmentListItem from "./components/AttachmentListItem.vue";
 import AttachmentPoliciesModal from "./components/AttachmentPoliciesModal.vue";
 import AttachmentUploadModal from "./components/AttachmentUploadModal.vue";
+import AttachmentLoading from "./components/AttachmentLoading.vue";
+import AttachmentError from "./components/AttachmentError.vue";
 import { useAttachmentControl } from "./composables/use-attachment";
 import { useFetchAttachmentGroup } from "./composables/use-attachment-group";
 import { useFetchAttachmentPolicy } from "./composables/use-attachment-policy";
+import LazyVideo from "@/components/video/LazyVideo.vue";
 
 const { t } = useI18n();
 
@@ -130,14 +132,16 @@ provide<Ref<Set<Attachment>>>("selectedAttachments", selectedAttachments);
 const handleMove = async (group: Group) => {
   try {
     const promises = Array.from(selectedAttachments.value).map((attachment) => {
-      const attachmentToUpdate = cloneDeep(attachment);
-      attachmentToUpdate.spec.groupName = group.metadata.name;
-      return apiClient.extension.storage.attachment.updateStorageHaloRunV1alpha1Attachment(
-        {
-          name: attachment.metadata.name,
-          attachment: attachmentToUpdate,
-        }
-      );
+      return coreApiClient.storage.attachment.patchAttachment({
+        name: attachment.metadata.name,
+        jsonPatchInner: [
+          {
+            op: "add",
+            path: "/spec/groupName",
+            value: group.metadata.name,
+          },
+        ],
+      });
     });
 
     await Promise.all(promises);
@@ -174,7 +178,6 @@ const handleCheckAllChange = (e: Event) => {
 const onDetailModalClose = () => {
   selectedAttachment.value = undefined;
   nameQuery.value = undefined;
-  nameQueryAttachment.value = undefined;
   detailVisible.value = false;
   handleFetchAttachments();
 };
@@ -205,16 +208,15 @@ const viewType = useLocalStorage("attachment-view-type", "list");
 const routeQueryAction = useRouteQuery<string | undefined>("action");
 
 onMounted(() => {
-  if (!routeQueryAction.value) {
-    return;
-  }
   if (routeQueryAction.value === "upload") {
     uploadVisible.value = true;
+  }
+  if (nameQuery.value) {
+    detailVisible.value = true;
   }
 });
 
 const nameQuery = useRouteQuery<string | undefined>("name");
-const nameQueryAttachment = ref<Attachment>();
 
 watch(
   () => selectedAttachment.value,
@@ -224,25 +226,11 @@ watch(
     }
   }
 );
-
-onMounted(() => {
-  if (!nameQuery.value) {
-    return;
-  }
-  apiClient.extension.storage.attachment
-    .getStorageHaloRunV1alpha1Attachment({
-      name: nameQuery.value,
-    })
-    .then((response) => {
-      nameQueryAttachment.value = response.data;
-      detailVisible.value = true;
-    });
-});
 </script>
 <template>
   <AttachmentDetailModal
     v-if="detailVisible"
-    :attachment="selectedAttachment || nameQueryAttachment"
+    :name="selectedAttachment?.metadata.name || nameQuery"
     @close="onDetailModalClose"
   >
     <template #actions>
@@ -322,7 +310,7 @@ onMounted(() => {
                         $t("core.attachment.operations.deselect_items.button")
                       }}
                     </VButton>
-                    <VDropdown>
+                    <VDropdown v-if="groups?.length">
                       <VButton>
                         {{ $t("core.attachment.operations.move.button") }}
                       </VButton>
@@ -521,28 +509,33 @@ onMounted(() => {
                         v-if="isImage(attachment.spec.mediaType)"
                         :key="attachment.metadata.name"
                         :alt="attachment.spec.displayName"
-                        :src="attachment.status?.permalink"
+                        :src="
+                          attachment.status?.thumbnails?.S ||
+                          attachment.status?.permalink
+                        "
                         classes="pointer-events-none object-cover group-hover:opacity-75 transform-gpu"
                       >
                         <template #loading>
-                          <div
-                            class="flex h-full items-center justify-center object-cover"
-                          >
-                            <span class="text-xs text-gray-400">
-                              {{ $t("core.common.status.loading") }}...
-                            </span>
-                          </div>
+                          <AttachmentLoading />
                         </template>
                         <template #error>
-                          <div
-                            class="flex h-full items-center justify-center object-cover"
-                          >
-                            <span class="text-xs text-red-400">
-                              {{ $t("core.common.status.loading_error") }}
-                            </span>
-                          </div>
+                          <AttachmentError />
                         </template>
                       </LazyImage>
+                      <LazyVideo
+                        v-else-if="
+                          attachment?.spec.mediaType?.startsWith('video/')
+                        "
+                        :src="attachment.status?.permalink"
+                        classes="object-cover group-hover:opacity-75"
+                      >
+                        <template #loading>
+                          <AttachmentLoading />
+                        </template>
+                        <template #error>
+                          <AttachmentError />
+                        </template>
+                      </LazyVideo>
                       <AttachmentFileTypeIcon
                         v-else
                         :file-name="attachment.spec.displayName"

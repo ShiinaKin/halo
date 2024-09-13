@@ -20,6 +20,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 import run.halo.app.content.AbstractContentService;
+import run.halo.app.content.CategoryService;
 import run.halo.app.content.ContentRequest;
 import run.halo.app.content.ContentWrapper;
 import run.halo.app.content.Contributor;
@@ -36,7 +37,7 @@ import run.halo.app.core.extension.content.Tag;
 import run.halo.app.core.extension.service.UserService;
 import run.halo.app.extension.ListOptions;
 import run.halo.app.extension.ListResult;
-import run.halo.app.extension.PageRequestImpl;
+import run.halo.app.extension.MetadataOperator;
 import run.halo.app.extension.ReactiveExtensionClient;
 import run.halo.app.extension.Ref;
 import run.halo.app.extension.router.selector.FieldSelector;
@@ -57,19 +58,22 @@ public class PostServiceImpl extends AbstractContentService implements PostServi
     private final ReactiveExtensionClient client;
     private final CounterService counterService;
     private final UserService userService;
+    private final CategoryService categoryService;
 
     public PostServiceImpl(ReactiveExtensionClient client, CounterService counterService,
-        UserService userService) {
+        UserService userService, CategoryService categoryService) {
         super(client);
         this.client = client;
         this.counterService = counterService;
         this.userService = userService;
+        this.categoryService = categoryService;
     }
 
     @Override
     public Mono<ListResult<ListedPost>> listPost(PostQuery query) {
-        return client.listBy(Post.class, query.toListOptions(),
-                PageRequestImpl.of(query.getPage(), query.getSize(), query.getSort())
+        return buildListOptions(query)
+            .flatMap(listOptions ->
+                client.listBy(Post.class, listOptions, query.toPageRequest())
             )
             .flatMap(listResult -> Flux.fromStream(listResult.get())
                 .map(this::getListedPost)
@@ -80,6 +84,26 @@ public class PostServiceImpl extends AbstractContentService implements PostServi
                 )
                 .defaultIfEmpty(ListResult.emptyResult())
             );
+    }
+
+    Mono<ListOptions> buildListOptions(PostQuery query) {
+        var categoryName = query.getCategoryWithChildren();
+        if (categoryName == null) {
+            return Mono.just(query.toListOptions());
+        }
+        return categoryService.listChildren(categoryName)
+            .collectList()
+            .map(categories -> {
+                var categoryNames = categories.stream()
+                    .map(Category::getMetadata)
+                    .map(MetadataOperator::getName)
+                    .toList();
+                var listOptions = query.toListOptions();
+                var newFiledSelector = listOptions.getFieldSelector()
+                    .andQuery(in("spec.categories", categoryNames));
+                listOptions.setFieldSelector(newFiledSelector);
+                return listOptions;
+            });
     }
 
     Mono<Stats> fetchStats(Post post) {

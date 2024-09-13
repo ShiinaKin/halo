@@ -1,10 +1,11 @@
 <script lang="ts" setup>
+import H2WarningAlert from "@/components/alerts/H2WarningAlert.vue";
 import type { GlobalInfo, Info, Startup } from "@/types";
-import { apiClient } from "@/utils/api-client";
 import { formatDatetime } from "@/utils/date";
 import { usePermission } from "@/utils/permission";
 import { useThemeStore } from "@console/stores/theme";
 import type { Plugin } from "@halo-dev/api-client";
+import { consoleApiClient } from "@halo-dev/api-client";
 import {
   IconClipboardLine,
   IconTerminalBoxLine,
@@ -64,7 +65,7 @@ const { data: startup } = useQuery<Startup>({
 const { data: plugins, isLoading: isPluginsLoading } = useQuery<Plugin[]>({
   queryKey: ["enabled-plugins"],
   queryFn: async () => {
-    const { data } = await apiClient.plugin.listPlugins({
+    const { data } = await consoleApiClient.plugin.plugin.listPlugins({
       page: 0,
       size: 0,
       enabled: true,
@@ -364,17 +365,7 @@ const handleDownloadLogfile = () => {
               <span>
                 {{ [info.database.name, info.database.version].join(" / ") }}
               </span>
-              <VAlert
-                v-if="info.database.name.startsWith('H2')"
-                class="mt-3"
-                type="warning"
-                :title="$t('core.common.text.warning')"
-                :closable="false"
-              >
-                <template #description>
-                  {{ $t("core.overview.alert.h2_warning") }}
-                </template>
-              </VAlert>
+              <H2WarningAlert class="mt-3" />
             </VDescriptionItem>
             <VDescriptionItem :label="$t('core.overview.fields.os')">
               {{ info.os.name }} {{ info.os.version }} / {{ info.os.arch }}

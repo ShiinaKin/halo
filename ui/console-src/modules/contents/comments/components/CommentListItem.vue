@@ -1,6 +1,5 @@
 <script lang="ts" setup>
 import { usePluginModuleStore } from "@/stores/plugin";
-import { apiClient } from "@/utils/api-client";
 import { formatDatetime } from "@/utils/date";
 import { usePermission } from "@/utils/permission";
 import type {
@@ -10,6 +9,7 @@ import type {
   Post,
   SinglePage,
 } from "@halo-dev/api-client";
+import { consoleApiClient, coreApiClient } from "@halo-dev/api-client";
 import {
   Dialog,
   IconAddCircle,
@@ -29,13 +29,23 @@ import {
 import type {
   CommentSubjectRefProvider,
   CommentSubjectRefResult,
+  OperationItem,
 } from "@halo-dev/console-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
-import { cloneDeep } from "lodash-es";
-import { computed, onMounted, provide, ref, type Ref } from "vue";
+import {
+  computed,
+  onMounted,
+  provide,
+  ref,
+  type Ref,
+  toRefs,
+  markRaw,
+} from "vue";
 import { useI18n } from "vue-i18n";
 import ReplyCreationModal from "./ReplyCreationModal.vue";
 import ReplyListItem from "./ReplyListItem.vue";
+import { useOperationItemExtensionPoint } from "@console/composables/use-operation-extension-points";
+import EntityDropdownItems from "@/components/entity/EntityDropdownItems.vue";
 
 const { currentUserHasPermission } = usePermission();
 const { t } = useI18n();
@@ -50,6 +60,8 @@ const props = withDefaults(
     isSelected: false,
   }
 );
+
+const { comment } = toRefs(props);
 
 const hoveredReply = ref<ListedReply>();
 const showReplies = ref(false);
@@ -66,7 +78,7 @@ const handleDelete = async () => {
     cancelText: t("core.common.buttons.cancel"),
     onConfirm: async () => {
       try {
-        await apiClient.extension.comment.deleteContentHaloRunV1alpha1Comment({
+        await coreApiClient.content.comment.deleteComment({
           name: props.comment?.comment?.metadata.name as string,
         });
 
@@ -91,17 +103,21 @@ const handleApproveReplyInBatch = async () => {
           return !reply.reply.spec.approved;
         });
         const promises = repliesToUpdate?.map((reply) => {
-          return apiClient.extension.reply.updateContentHaloRunV1alpha1Reply({
+          return coreApiClient.content.reply.patchReply({
             name: reply.reply.metadata.name,
-            reply: {
-              ...reply.reply,
-              spec: {
-                ...reply.reply.spec,
-                approved: true,
-                // TODO: 暂时由前端设置发布时间。see https://github.com/halo-dev/halo/pull/2746
-                approvedTime: new Date().toISOString(),
+            jsonPatchInner: [
+              {
+                op: "add",
+                path: "/spec/approved",
+                value: true,
               },
-            },
+              {
+                op: "add",
+                path: "/spec/approvedTime",
+                // TODO: 暂时由前端设置发布时间。see https://github.com/halo-dev/halo/pull/2746
+                value: new Date().toISOString(),
+              },
+            ],
           });
         });
         await Promise.all(promises || []);
@@ -118,13 +134,21 @@ const handleApproveReplyInBatch = async () => {
 
 const handleApprove = async () => {
   try {
-    const commentToUpdate = cloneDeep(props.comment.comment);
-    commentToUpdate.spec.approved = true;
-    // TODO: 暂时由前端设置发布时间。see https://github.com/halo-dev/halo/pull/2746
-    commentToUpdate.spec.approvedTime = new Date().toISOString();
-    await apiClient.extension.comment.updateContentHaloRunV1alpha1Comment({
-      name: commentToUpdate.metadata.name,
-      comment: commentToUpdate,
+    await coreApiClient.content.comment.patchComment({
+      name: props.comment.comment.metadata.name,
+      jsonPatchInner: [
+        {
+          op: "add",
+          path: "/spec/approved",
+          value: true,
+        },
+        {
+          op: "add",
+          path: "/spec/approvedTime",
+          // TODO: 暂时由前端设置发布时间。see https://github.com/halo-dev/halo/pull/2746
+          value: new Date().toISOString(),
+        },
+      ],
     });
 
     Toast.success(t("core.common.toast.operation_success"));
@@ -146,7 +170,7 @@ const {
     showReplies,
   ],
   queryFn: async () => {
-    const { data } = await apiClient.reply.listReplies({
+    const { data } = await consoleApiClient.content.reply.listReplies({
       commentName: props.comment.comment.metadata.name,
       page: 0,
       size: 0,
@@ -165,21 +189,16 @@ const {
 const { mutateAsync: updateCommentLastReadTimeMutate } = useMutation({
   mutationKey: ["update-comment-last-read-time"],
   mutationFn: async () => {
-    const { data: latestComment } =
-      await apiClient.extension.comment.getContentHaloRunV1alpha1Comment({
-        name: props.comment.comment.metadata.name,
-      });
-
-    if (!latestComment.status?.unreadReplyCount) {
-      return latestComment;
-    }
-
-    latestComment.spec.lastReadTime = new Date().toISOString();
-
-    return apiClient.extension.comment.updateContentHaloRunV1alpha1Comment(
+    return coreApiClient.content.comment.patchComment(
       {
-        name: latestComment.metadata.name,
-        comment: latestComment,
+        name: props.comment.comment.metadata.name,
+        jsonPatchInner: [
+          {
+            op: "add",
+            path: "/spec/lastReadTime",
+            value: new Date().toISOString(),
+          },
+        ],
       },
       {
         mute: true,
@@ -287,6 +306,35 @@ const subjectRefResult = computed(() => {
   }
   return subjectRef.resolve(subject);
 });
+
+const { operationItems } = useOperationItemExtensionPoint<ListedComment>(
+  "comment:list-item:operation:create",
+  comment,
+  computed((): OperationItem<ListedComment>[] => [
+    {
+      priority: 0,
+      component: markRaw(VDropdownItem),
+      label: t("core.comment.operations.approve_comment_in_batch.button"),
+      action: handleApprove,
+      hidden: props.comment?.comment.spec.approved,
+    },
+    {
+      priority: 10,
+      component: markRaw(VDropdownItem),
+      label: t("core.comment.operations.approve_applies_in_batch.button"),
+      action: handleApproveReplyInBatch,
+    },
+    {
+      priority: 20,
+      component: markRaw(VDropdownItem),
+      props: {
+        type: "danger",
+      },
+      label: t("core.common.buttons.delete"),
+      action: handleDelete,
+    },
+  ])
+);
 </script>
 
 <template>
@@ -413,18 +461,7 @@ const subjectRefResult = computed(() => {
       v-if="currentUserHasPermission(['system:comments:manage'])"
       #dropdownItems
     >
-      <VDropdownItem
-        v-if="!comment?.comment.spec.approved"
-        @click="handleApprove"
-      >
-        {{ $t("core.comment.operations.approve_comment_in_batch.button") }}
-      </VDropdownItem>
-      <VDropdownItem @click="handleApproveReplyInBatch">
-        {{ $t("core.comment.operations.approve_applies_in_batch.button") }}
-      </VDropdownItem>
-      <VDropdownItem type="danger" @click="handleDelete">
-        {{ $t("core.common.buttons.delete") }}
-      </VDropdownItem>
+      <EntityDropdownItems :dropdown-items="operationItems" :item="comment" />
     </template>
 
     <template v-if="showReplies" #footer>

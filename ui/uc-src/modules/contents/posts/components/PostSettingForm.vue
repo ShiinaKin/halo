@@ -1,13 +1,12 @@
 <script lang="ts" setup>
-import { IconRefreshLine } from "@halo-dev/components";
-import type { PostFormState } from "../types";
-import { formatDatetime, toISOString } from "@/utils/date";
-import { computed } from "vue";
-import useSlugify from "@console/composables/use-slugify";
-import { FormType } from "@/types/slug";
-import { ref } from "vue";
 import HasPermission from "@/components/permission/HasPermission.vue";
+import { FormType } from "@/types/slug";
+import { formatDatetime, toISOString } from "@/utils/date";
+import useSlugify from "@console/composables/use-slugify";
+import { IconRefreshLine } from "@halo-dev/components";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import type { PostFormState } from "../types";
 
 const { t } = useI18n();
 
@@ -136,13 +135,9 @@ const publishTimeHelp = computed(() => {
           />
           <FormKit
             :value="true"
-            :options="[
-              { label: $t('core.common.radio.yes'), value: true },
-              { label: $t('core.common.radio.no'), value: false },
-            ]"
             name="excerptAutoGenerate"
             :label="$t('core.post.settings.fields.auto_generate_excerpt.label')"
-            type="radio"
+            type="checkbox"
           >
           </FormKit>
           <FormKit
@@ -171,21 +166,13 @@ const publishTimeHelp = computed(() => {
         <div class="mt-5 divide-y divide-gray-100 md:col-span-3 md:mt-0">
           <FormKit
             name="allowComment"
-            :options="[
-              { label: $t('core.common.radio.yes'), value: true },
-              { label: $t('core.common.radio.no'), value: false },
-            ]"
             :label="$t('core.post.settings.fields.allow_comment.label')"
-            type="radio"
+            type="checkbox"
           ></FormKit>
           <FormKit
-            :options="[
-              { label: $t('core.common.radio.yes'), value: true },
-              { label: $t('core.common.radio.no'), value: false },
-            ]"
             :label="$t('core.post.settings.fields.pinned.label')"
             name="pinned"
-            type="radio"
+            type="checkbox"
           ></FormKit>
           <FormKit
             :options="[

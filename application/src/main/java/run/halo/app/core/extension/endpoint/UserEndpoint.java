@@ -10,11 +10,10 @@ import static org.springdoc.core.fn.builders.requestbody.Builder.requestBodyBuil
 import static org.springdoc.core.fn.builders.schema.Builder.schemaBuilder;
 import static org.springframework.web.reactive.function.server.RequestPredicates.contentType;
 import static run.halo.app.extension.ListResult.generateGenericClass;
-import static run.halo.app.extension.index.query.QueryFactory.and;
 import static run.halo.app.extension.index.query.QueryFactory.contains;
 import static run.halo.app.extension.index.query.QueryFactory.equal;
+import static run.halo.app.extension.index.query.QueryFactory.in;
 import static run.halo.app.extension.index.query.QueryFactory.or;
-import static run.halo.app.extension.router.QueryParamBuildUtil.sortParameter;
 import static run.halo.app.extension.router.selector.SelectorUtil.labelAndFieldSelectorToListOptions;
 import static run.halo.app.security.authorization.AuthorityUtils.authoritiesToRoles;
 
@@ -24,17 +23,18 @@ import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
 import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import io.github.resilience4j.reactor.ratelimiter.operator.RateLimiterOperator;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
-import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.security.Principal;
 import java.time.Duration;
-import java.util.Collections;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -46,7 +46,6 @@ import org.springdoc.core.fn.builders.operation.Builder;
 import org.springdoc.webflux.core.fn.SpringdocRouteBuilder;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.dao.OptimisticLockingFailureException;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.http.codec.multipart.Part;
@@ -63,7 +62,6 @@ import org.springframework.web.reactive.function.BodyExtractors;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
-import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.ServerWebInputException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -82,9 +80,7 @@ import run.halo.app.extension.Metadata;
 import run.halo.app.extension.MetadataUtil;
 import run.halo.app.extension.PageRequestImpl;
 import run.halo.app.extension.ReactiveExtensionClient;
-import run.halo.app.extension.router.IListRequest;
-import run.halo.app.extension.router.selector.FieldSelector;
-import run.halo.app.infra.AnonymousUserConst;
+import run.halo.app.extension.router.SortableRequest;
 import run.halo.app.infra.SystemConfigurableEnvironmentFetcher;
 import run.halo.app.infra.SystemSetting;
 import run.halo.app.infra.ValidationUtils;
@@ -111,7 +107,7 @@ public class UserEndpoint implements CustomEndpoint {
 
     @Override
     public RouterFunction<ServerResponse> endpoint() {
-        var tag = "api.console.halo.run/v1alpha1/User";
+        var tag = "UserV1alpha1Console";
         return SpringdocRouteBuilder.route()
             .GET("/users/-", this::me, builder -> builder.operationId("GetCurrentUserDetail")
                 .description("Get current user detail")
@@ -444,13 +440,9 @@ public class UserEndpoint implements CustomEndpoint {
             })
             .flatMap(userRequest -> {
                 User newUser = CreateUserRequest.from(userRequest);
-                return userService.createUser(newUser, userRequest.roles())
-                    .then(Mono.defer(() -> userService.updateWithRawPassword(userRequest.name(),
-                            userRequest.password()))
-                        .retryWhen(Retry.backoff(5, Duration.ofMillis(100))
-                            .filter(OptimisticLockingFailureException.class::isInstance)
-                        )
-                    );
+                var encryptedPwd = userService.encryptPassword(userRequest.password());
+                newUser.getSpec().setPassword(encryptedPwd);
+                return userService.createUser(newUser, userRequest.roles());
             })
             .flatMap(user -> ServerResponse.ok()
                 .contentType(MediaType.APPLICATION_JSON)
@@ -461,11 +453,14 @@ public class UserEndpoint implements CustomEndpoint {
     private Mono<ServerResponse> getUserByName(ServerRequest request) {
         final var name = request.pathVariable("name");
         return userService.getUser(name)
-            .flatMap(this::toDetailedUser)
-            .flatMap(user -> ServerResponse.ok()
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(user)
-            );
+            .flatMap(user -> roleService.getRolesByUsername(name)
+                .collectList()
+                .flatMap(roleNames -> roleService.list(new HashSet<>(roleNames), true)
+                    .collectList()
+                    .map(roles -> new DetailedUser(user, roles))
+                )
+            )
+            .flatMap(detailedUser -> ServerResponse.ok().bodyValue(detailedUser));
     }
 
     record CreateUserRequest(@Schema(requiredMode = REQUIRED) String name,
@@ -604,33 +599,16 @@ public class UserEndpoint implements CustomEndpoint {
     Mono<ServerResponse> me(ServerRequest request) {
         return ReactiveSecurityContextHolder.getContext()
             .map(SecurityContext::getAuthentication)
-            .filter(obj -> !(obj instanceof TwoFactorAuthentication))
-            .map(Authentication::getName)
-            .defaultIfEmpty(AnonymousUserConst.PRINCIPAL)
-            .flatMap(userService::getUser)
-            .flatMap(this::toDetailedUser)
-            .flatMap(user -> ServerResponse.ok()
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(user));
-    }
-
-    private Mono<DetailedUser> toDetailedUser(User user) {
-        Set<String> roleNames = roleNames(user);
-        return roleService.list(roleNames)
-            .collectList()
-            .map(roles -> new DetailedUser(user, roles))
-            .defaultIfEmpty(new DetailedUser(user, List.of()));
-    }
-
-    Set<String> roleNames(User user) {
-        Assert.notNull(user, "User must not be null");
-        Map<String, String> annotations = MetadataUtil.nullSafeAnnotations(user);
-        String roleNamesJson = annotations.get(User.ROLE_NAMES_ANNO);
-        if (StringUtils.isBlank(roleNamesJson)) {
-            return Set.of();
-        }
-        return JsonUtils.jsonToObject(roleNamesJson, new TypeReference<>() {
-        });
+            .filter(auth -> !(auth instanceof TwoFactorAuthentication))
+            .flatMap(auth -> userService.getUser(auth.getName())
+                .flatMap(user -> {
+                    var roleNames = authoritiesToRoles(auth.getAuthorities());
+                    return roleService.list(roleNames, true)
+                        .collectList()
+                        .map(roles -> new DetailedUser(user, roles));
+                })
+            )
+            .flatMap(detailedUser -> ServerResponse.ok().bodyValue(detailedUser));
     }
 
     record DetailedUser(@Schema(requiredMode = REQUIRED) User user,
@@ -653,95 +631,62 @@ public class UserEndpoint implements CustomEndpoint {
 
     @NonNull
     private Mono<ServerResponse> getUserPermission(ServerRequest request) {
-        var name = request.pathVariable("name");
-        Mono<UserPermission> userPermission;
-        if (SELF_USER.equals(name)) {
-            userPermission = ReactiveSecurityContextHolder.getContext()
-                .map(SecurityContext::getAuthentication)
-                .flatMap(auth -> {
-                    var roleNames = authoritiesToRoles(auth.getAuthorities());
-                    var up = new UserPermission();
-                    var roles = roleService.list(roleNames)
-                        .collect(Collectors.toSet())
-                        .doOnNext(up::setRoles)
-                        .then();
-                    var permissions = roleService.listPermissions(roleNames)
-                        .distinct()
-                        .collectList()
-                        .doOnNext(up::setPermissions)
-                        .doOnNext(perms -> {
-                            var uiPermissions = uiPermissions(new HashSet<>(perms));
-                            up.setUiPermissions(uiPermissions);
-                        })
-                        .then();
-                    return roles.and(permissions).thenReturn(up);
+        var username = request.pathVariable("name");
+        return Mono.defer(() -> {
+            if (SELF_USER.equals(username)) {
+                return ReactiveSecurityContextHolder.getContext()
+                    .map(SecurityContext::getAuthentication)
+                    .map(auth -> authoritiesToRoles(auth.getAuthorities()));
+            }
+            return roleService.getRolesByUsername(username)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        }).flatMap(roleNames -> {
+            var up = new UserPermission();
+            var setRoles = roleService.list(roleNames, true)
+                .distinct()
+                .collectSortedList()
+                .doOnNext(up::setRoles);
+            var setPerms = roleService.listPermissions(roleNames)
+                .distinct()
+                .collectSortedList()
+                .doOnNext(permissions -> {
+                    up.setPermissions(permissions);
+                    up.setUiPermissions(uiPermissions(permissions));
                 });
-        } else {
-            // get roles from username
-            userPermission = userService.listRoles(name)
-                .collect(Collectors.toSet())
-                .flatMap(roles -> {
-                    var up = new UserPermission();
-                    var setRoles = Mono.fromRunnable(() -> up.setRoles(roles)).then();
-                    var roleNames = roles.stream()
-                        .map(role -> role.getMetadata().getName())
-                        .collect(Collectors.toSet());
-                    var setPermissions = roleService.listPermissions(roleNames)
-                        .distinct()
-                        .collectList()
-                        .doOnNext(up::setPermissions)
-                        .doOnNext(perms -> {
-                            var uiPermissions = uiPermissions(new HashSet<>(perms));
-                            up.setUiPermissions(uiPermissions);
-                        })
-                        .then();
-                    return setRoles.and(setPermissions).thenReturn(up);
-                });
-        }
-
-        return ServerResponse.ok().body(userPermission, UserPermission.class);
+            return Mono.when(setRoles, setPerms).thenReturn(up);
+        }).flatMap(userPermission -> ServerResponse.ok().bodyValue(userPermission));
     }
 
-    private Set<String> uiPermissions(Set<Role> roles) {
+    private List<String> uiPermissions(Collection<Role> roles) {
         if (CollectionUtils.isEmpty(roles)) {
-            return Collections.emptySet();
+            return List.of();
         }
-        return roles.stream()
-            .<Set<String>>map(role -> {
-                var annotations = role.getMetadata().getAnnotations();
-                if (annotations == null) {
-                    return Set.of();
-                }
-                var uiPermissionsJson = annotations.get(Role.UI_PERMISSIONS_ANNO);
-                if (StringUtils.isBlank(uiPermissionsJson)) {
-                    return Set.of();
-                }
-                return JsonUtils.jsonToObject(uiPermissionsJson,
-                    new TypeReference<LinkedHashSet<String>>() {
-                    });
-            })
-            .flatMap(Set::stream)
-            .collect(Collectors.toSet());
+        var uiPerms = new LinkedList<String>();
+        roles.forEach(role -> Optional.ofNullable(role.getMetadata().getAnnotations())
+            .map(annotations -> annotations.get(Role.UI_PERMISSIONS_ANNO))
+            .filter(StringUtils::isNotBlank)
+            .map(json -> JsonUtils.jsonToObject(json, new TypeReference<Set<String>>() {
+            }))
+            .ifPresent(uiPerms::addAll)
+        );
+        return uiPerms.stream().distinct().sorted().toList();
     }
 
     @Data
     public static class UserPermission {
         @Schema(requiredMode = REQUIRED)
-        private Set<Role> roles;
+        private List<Role> roles;
         @Schema(requiredMode = REQUIRED)
         private List<Role> permissions;
         @Schema(requiredMode = REQUIRED)
-        private Set<String> uiPermissions;
+        private List<String> uiPermissions;
 
     }
 
-    public static class ListRequest extends IListRequest.QueryListRequest {
-
-        private final ServerWebExchange exchange;
+    public static class ListRequest extends SortableRequest {
 
         public ListRequest(ServerRequest request) {
-            super(request.queryParams());
-            this.exchange = request.exchange();
+            super(request.exchange());
         }
 
         @Schema(name = "keyword")
@@ -754,52 +699,32 @@ public class UserEndpoint implements CustomEndpoint {
             return queryParams.getFirst("role");
         }
 
-        @ArraySchema(uniqueItems = true,
-            arraySchema = @Schema(name = "sort",
-                description = "Sort property and direction of the list result. Supported fields: "
-                    + "creationTimestamp"),
-            schema = @Schema(description = "like field,asc or field,desc",
-                implementation = String.class,
-                example = "creationTimestamp,desc"))
-        public Sort getSort() {
-            var sort = SortResolver.defaultInstance.resolve(exchange);
-            sort = sort.and(Sort.by("metadata.creationTimestamp", "metadata.name").descending());
-            return sort;
-        }
-
         /**
          * Converts query parameters to list options.
          */
         public ListOptions toListOptions() {
-            var listOptions =
+            var defaultListOptions =
                 labelAndFieldSelectorToListOptions(getLabelSelector(), getFieldSelector());
 
-            var fieldQuery = listOptions.getFieldSelector().query();
-            if (StringUtils.isNotBlank(getKeyword())) {
-                fieldQuery = and(
-                    fieldQuery,
-                    or(
-                        contains("spec.displayName", getKeyword()),
-                        equal("metadata.name", getKeyword())
-                    )
-                );
-            }
+            var builder = ListOptions.builder(defaultListOptions);
 
-            if (StringUtils.isNotBlank(getRole())) {
-                fieldQuery = and(
-                    fieldQuery,
-                    equal(User.USER_RELATED_ROLES_INDEX, getRole())
-                );
-            }
+            Optional.ofNullable(getKeyword())
+                .filter(StringUtils::isNotBlank)
+                .ifPresent(keyword -> builder.andQuery(or(
+                    contains("spec.displayName", keyword),
+                    equal("metadata.name", keyword)
+                )));
 
-            listOptions.setFieldSelector(FieldSelector.of(fieldQuery));
-            return listOptions;
+            Optional.ofNullable(getRole())
+                .filter(StringUtils::isNotBlank)
+                .ifPresent(role -> builder.andQuery(in(User.USER_RELATED_ROLES_INDEX, role)));
+
+            return builder.build();
         }
 
         public static void buildParameters(Builder builder) {
-            IListRequest.buildParameters(builder);
-            builder.parameter(sortParameter())
-                .parameter(parameterBuilder()
+            SortableRequest.buildParameters(builder);
+            builder.parameter(parameterBuilder()
                     .in(ParameterIn.QUERY)
                     .name("keyword")
                     .description("Keyword to search")
@@ -824,8 +749,7 @@ public class UserEndpoint implements CustomEndpoint {
             .map(UserEndpoint.ListRequest::new)
             .flatMap(listRequest -> client.listBy(User.class, listRequest.toListOptions(),
                 PageRequestImpl.of(
-                    listRequest.getPage(), listRequest.getSize(),
-                    listRequest.getSort()
+                    listRequest.getPage(), listRequest.getSize(), listRequest.getSort()
                 )
             ))
             .flatMap(this::toListedUser)
@@ -833,17 +757,32 @@ public class UserEndpoint implements CustomEndpoint {
     }
 
     private Mono<ListResult<ListedUser>> toListedUser(ListResult<User> listResult) {
-        return Flux.fromStream(listResult.get())
-            .concatMap(user -> {
-                Set<String> roleNames = roleNames(user);
-                return roleService.list(roleNames)
-                    .collectList()
-                    .map(roles -> new ListedUser(user, roles))
-                    .defaultIfEmpty(new ListedUser(user, List.of()));
-            })
-            .collectList()
-            .map(items -> convertFrom(listResult, items))
-            .defaultIfEmpty(convertFrom(listResult, List.of()));
+        var usernames = listResult.getItems().stream()
+            .map(user -> user.getMetadata().getName())
+            .collect(Collectors.toList());
+        return roleService.getRolesByUsernames(usernames)
+            .flatMap(usernameRolesMap -> {
+                var allRoleNames = new HashSet<String>();
+                usernameRolesMap.values().forEach(allRoleNames::addAll);
+                return roleService.list(allRoleNames)
+                    .collectMap(role -> role.getMetadata().getName())
+                    .map(roleMap -> {
+                        var listedUsers = listResult.getItems().stream()
+                            .map(user -> {
+                                var username = user.getMetadata().getName();
+                                var roles = Optional.ofNullable(usernameRolesMap.get(username))
+                                    .map(roleNames -> roleNames.stream()
+                                        .map(roleMap::get)
+                                        .filter(Objects::nonNull)
+                                        .toList()
+                                    )
+                                    .orElseGet(List::of);
+                                return new ListedUser(user, roles);
+                            })
+                            .toList();
+                        return convertFrom(listResult, listedUsers);
+                    });
+            });
     }
 
     <T> ListResult<T> convertFrom(ListResult<?> listResult, List<T> items) {

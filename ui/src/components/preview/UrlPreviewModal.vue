@@ -1,17 +1,14 @@
 <script lang="ts" setup>
-import { axiosInstance } from "@/utils/api-client";
 import {
-  VModal,
-  IconLink,
-  VTabbar,
   IconComputer,
-  IconTablet,
+  IconLink,
   IconPhone,
+  IconTablet,
   VLoading,
+  VModal,
+  VTabbar,
 } from "@halo-dev/components";
-import { useQuery } from "@tanstack/vue-query";
-import { toRefs } from "vue";
-import { computed, markRaw, ref } from "vue";
+import { computed, markRaw, ref, toRefs } from "vue";
 
 const props = withDefaults(
   defineProps<{
@@ -55,22 +52,6 @@ const iframeClasses = computed(() => {
   }
   return "w-96 h-[50rem] ring-2 rounded ring-gray-300";
 });
-
-const { data: html, isLoading } = useQuery({
-  queryKey: ["url-preview", url],
-  queryFn: async () => {
-    const { data } = await axiosInstance.get(url.value, {
-      headers: {
-        Accept: "text/html",
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
-        Expires: "0",
-      },
-    });
-    return data;
-  },
-  enabled: computed(() => !!url.value),
-});
 </script>
 <template>
   <VModal
@@ -97,12 +78,12 @@ const { data: html, isLoading } = useQuery({
       </span>
     </template>
     <div class="flex h-full items-center justify-center">
-      <VLoading v-if="isLoading" />
+      <VLoading v-if="!url" />
       <iframe
         v-else
         class="border-none transition-all duration-500"
         :class="iframeClasses"
-        :srcdoc="html"
+        :src="url"
       ></iframe>
     </div>
   </VModal>

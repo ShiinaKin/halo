@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 // core libs
+import { coreApiClient } from "@halo-dev/api-client";
 import { ref } from "vue";
-import { apiClient } from "@/utils/api-client";
 
 // components
 import {
@@ -40,9 +40,20 @@ const handleUpdateInBatch = useDebounceFn(async () => {
   try {
     batchUpdating.value = true;
     const promises = categoriesToUpdate.map((category) =>
-      apiClient.extension.category.updateContentHaloRunV1alpha1Category({
+      coreApiClient.content.category.patchCategory({
         name: category.metadata.name,
-        category: category,
+        jsonPatchInner: [
+          {
+            op: "add",
+            path: "/spec/children",
+            value: category.spec.children || [],
+          },
+          {
+            op: "add",
+            path: "/spec/priority",
+            value: category.spec.priority || 0,
+          },
+        ],
       })
     );
     await Promise.all(promises);

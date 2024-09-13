@@ -1,30 +1,28 @@
 <script lang="ts" setup>
+import PostContributorList from "@/components/user/PostContributorList.vue";
+import { singlePageLabels } from "@/constants/labels";
+import { formatDatetime } from "@/utils/date";
+import { usePermission } from "@/utils/permission";
+import type { ListedSinglePage, SinglePage } from "@halo-dev/api-client";
+import { coreApiClient } from "@halo-dev/api-client";
 import {
+  Dialog,
+  IconExternalLinkLine,
   IconEye,
   IconEyeOff,
-  IconExternalLinkLine,
-  VSpace,
-  Dialog,
-  VStatusDot,
+  Toast,
+  VDropdownDivider,
+  VDropdownItem,
   VEntity,
   VEntityField,
-  Toast,
-  VDropdownItem,
-  VDropdownDivider,
+  VSpace,
+  VStatusDot,
 } from "@halo-dev/components";
-import { computed, ref } from "vue";
-import type { ListedSinglePage, SinglePage } from "@halo-dev/api-client";
-import { apiClient } from "@/utils/api-client";
-import { formatDatetime } from "@/utils/date";
-import { RouterLink } from "vue-router";
-import { cloneDeep } from "lodash-es";
-import { usePermission } from "@/utils/permission";
-import { singlePageLabels } from "@/constants/labels";
 import { useMutation, useQueryClient } from "@tanstack/vue-query";
-import { useI18n } from "vue-i18n";
-import { inject } from "vue";
 import type { Ref } from "vue";
-import ContributorList from "../../_components/ContributorList.vue";
+import { computed, inject, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { RouterLink } from "vue-router";
 
 const { currentUserHasPermission } = usePermission();
 const { t } = useI18n();
@@ -72,25 +70,21 @@ const isPublishing = computed(() => {
 
 const { mutate: changeVisibleMutation } = useMutation({
   mutationFn: async (singlePage: SinglePage) => {
-    const { data } =
-      await apiClient.extension.singlePage.getContentHaloRunV1alpha1SinglePage({
-        name: singlePage.metadata.name,
-      });
-    data.spec.visible = data.spec.visible === "PRIVATE" ? "PUBLIC" : "PRIVATE";
-    await apiClient.extension.singlePage.updateContentHaloRunV1alpha1SinglePage(
-      {
-        name: singlePage.metadata.name,
-        singlePage: data,
-      },
-      {
-        mute: true,
-      }
-    );
-    await queryClient.invalidateQueries({ queryKey: ["singlePages"] });
+    return await coreApiClient.content.singlePage.patchSinglePage({
+      name: singlePage.metadata.name,
+      jsonPatchInner: [
+        {
+          op: "add",
+          path: "/spec/visible",
+          value: singlePage.spec.visible === "PRIVATE" ? "PUBLIC" : "PRIVATE",
+        },
+      ],
+    });
   },
   retry: 3,
   onSuccess: () => {
     Toast.success(t("core.common.toast.operation_success"));
+    queryClient.invalidateQueries({ queryKey: ["singlePages"] });
   },
   onError: () => {
     Toast.error(t("core.common.toast.operation_failed"));
@@ -105,14 +99,17 @@ const handleDelete = async () => {
     confirmText: t("core.common.buttons.confirm"),
     cancelText: t("core.common.buttons.cancel"),
     onConfirm: async () => {
-      const singlePageToUpdate = cloneDeep(props.singlePage.page);
-      singlePageToUpdate.spec.deleted = true;
-      await apiClient.extension.singlePage.updateContentHaloRunV1alpha1SinglePage(
-        {
-          name: props.singlePage.page.metadata.name,
-          singlePage: singlePageToUpdate,
-        }
-      );
+      await coreApiClient.content.singlePage.patchSinglePage({
+        name: props.singlePage.page.metadata.name,
+        jsonPatchInner: [
+          {
+            op: "add",
+            path: "/spec/deleted",
+            value: true,
+          },
+        ],
+      });
+
       await queryClient.invalidateQueries({ queryKey: ["singlePages"] });
 
       Toast.success(t("core.common.toast.delete_success"));
@@ -188,7 +185,10 @@ const handleDelete = async () => {
     <template #end>
       <VEntityField>
         <template #description>
-          <ContributorList :contributors="singlePage.contributors" />
+          <PostContributorList
+            :owner="singlePage.owner"
+            :contributors="singlePage.contributors"
+          />
         </template>
       </VEntityField>
       <VEntityField :description="publishStatus">
@@ -196,22 +196,25 @@ const handleDelete = async () => {
           <VStatusDot :text="$t('core.common.tooltips.publishing')" animate />
         </template>
       </VEntityField>
-      <VEntityField>
-        <template #description>
-          <IconEye
-            v-if="singlePage.page.spec.visible === 'PUBLIC'"
-            v-tooltip="$t('core.page.filters.visible.items.public')"
-            class="cursor-pointer text-sm transition-all hover:text-blue-600"
-            @click="changeVisibleMutation(singlePage.page)"
-          />
-          <IconEyeOff
-            v-if="singlePage.page.spec.visible === 'PRIVATE'"
-            v-tooltip="$t('core.page.filters.visible.items.private')"
-            class="cursor-pointer text-sm transition-all hover:text-blue-600"
-            @click="changeVisibleMutation(singlePage.page)"
-          />
-        </template>
-      </VEntityField>
+      <HasPermission :permissions="['system:singlepages:manage']">
+        <VEntityField>
+          <template #description>
+            <IconEye
+              v-if="singlePage.page.spec.visible === 'PUBLIC'"
+              v-tooltip="$t('core.page.filters.visible.items.public')"
+              class="cursor-pointer text-sm transition-all hover:text-blue-600"
+              @click="changeVisibleMutation(singlePage.page)"
+            />
+            <IconEyeOff
+              v-if="singlePage.page.spec.visible === 'PRIVATE'"
+              v-tooltip="$t('core.page.filters.visible.items.private')"
+              class="cursor-pointer text-sm transition-all hover:text-blue-600"
+              @click="changeVisibleMutation(singlePage.page)"
+            />
+          </template>
+        </VEntityField>
+      </HasPermission>
+
       <VEntityField v-if="singlePage?.page?.spec.deleted">
         <template #description>
           <VStatusDot

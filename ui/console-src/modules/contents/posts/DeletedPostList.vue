@@ -1,32 +1,31 @@
 <script lang="ts" setup>
+import PostContributorList from "@/components/user/PostContributorList.vue";
+import { formatDatetime } from "@/utils/date";
+import { usePermission } from "@/utils/permission";
+import type { ListedPost, Post } from "@halo-dev/api-client";
+import { consoleApiClient, coreApiClient } from "@halo-dev/api-client";
 import {
+  Dialog,
   IconAddCircle,
   IconDeleteBin,
   IconRefreshLine,
-  Dialog,
+  Toast,
   VButton,
   VCard,
+  VDropdownItem,
   VEmpty,
+  VEntity,
+  VEntityField,
+  VLoading,
   VPageHeader,
   VPagination,
   VSpace,
   VStatusDot,
-  VEntity,
-  VEntityField,
-  VLoading,
-  Toast,
-  VDropdownItem,
 } from "@halo-dev/components";
-import PostTag from "./tags/components/PostTag.vue";
-import { ref, watch } from "vue";
-import type { ListedPost, Post } from "@halo-dev/api-client";
-import { apiClient } from "@/utils/api-client";
-import { formatDatetime } from "@/utils/date";
-import { usePermission } from "@/utils/permission";
-import { cloneDeep } from "lodash-es";
 import { useQuery } from "@tanstack/vue-query";
+import { ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import ContributorList from "../_components/ContributorList.vue";
+import PostTag from "./tags/components/PostTag.vue";
 
 const { currentUserHasPermission } = usePermission();
 const { t } = useI18n();
@@ -47,7 +46,7 @@ const {
 } = useQuery<ListedPost[]>({
   queryKey: ["deleted-posts", page, size, keyword],
   queryFn: async () => {
-    const { data } = await apiClient.post.listPosts({
+    const { data } = await consoleApiClient.content.post.listPosts({
       labelSelector: [`content.halo.run/deleted=true`],
       page: page.value,
       size: size.value,
@@ -92,7 +91,7 @@ const handleDeletePermanently = async (post: Post) => {
     confirmText: t("core.common.buttons.confirm"),
     cancelText: t("core.common.buttons.cancel"),
     onConfirm: async () => {
-      await apiClient.extension.post.deleteContentHaloRunV1alpha1Post({
+      await coreApiClient.content.post.deletePost({
         name: post.metadata.name,
       });
       await refetch();
@@ -112,7 +111,7 @@ const handleDeletePermanentlyInBatch = async () => {
     onConfirm: async () => {
       await Promise.all(
         selectedPostNames.value.map((name) => {
-          return apiClient.extension.post.deleteContentHaloRunV1alpha1Post({
+          return coreApiClient.content.post.deletePost({
             name,
           });
         })
@@ -132,11 +131,15 @@ const handleRecovery = async (post: Post) => {
     confirmText: t("core.common.buttons.confirm"),
     cancelText: t("core.common.buttons.cancel"),
     onConfirm: async () => {
-      const postToUpdate = cloneDeep(post);
-      postToUpdate.spec.deleted = false;
-      await apiClient.extension.post.updateContentHaloRunV1alpha1Post({
-        name: postToUpdate.metadata.name,
-        post: postToUpdate,
+      await coreApiClient.content.post.patchPost({
+        name: post.metadata.name,
+        jsonPatchInner: [
+          {
+            op: "add",
+            path: "/spec/deleted",
+            value: false,
+          },
+        ],
       });
 
       await refetch();
@@ -157,23 +160,23 @@ const handleRecoveryInBatch = async () => {
     onConfirm: async () => {
       await Promise.all(
         selectedPostNames.value.map((name) => {
-          const post = posts.value?.find(
+          const isPostExist = posts.value?.some(
             (item) => item.post.metadata.name === name
-          )?.post;
+          );
 
-          if (!post) {
+          if (!isPostExist) {
             return Promise.resolve();
           }
 
-          return apiClient.extension.post.updateContentHaloRunV1alpha1Post({
-            name: post.metadata.name,
-            post: {
-              ...post,
-              spec: {
-                ...post.spec,
-                deleted: false,
+          return coreApiClient.content.post.patchPost({
+            name: name,
+            jsonPatchInner: [
+              {
+                op: "add",
+                path: "/spec/deleted",
+                value: false,
               },
-            },
+            ],
           });
         })
       );
@@ -351,7 +354,10 @@ watch(
               <template #end>
                 <VEntityField>
                   <template #description>
-                    <ContributorList :contributors="post.contributors" />
+                    <PostContributorList
+                      :owner="post.owner"
+                      :contributors="post.contributors"
+                    />
                   </template>
                 </VEntityField>
                 <VEntityField v-if="!post?.post?.spec.deleted">

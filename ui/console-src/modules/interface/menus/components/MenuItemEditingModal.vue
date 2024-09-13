@@ -1,18 +1,18 @@
 <script lang="ts" setup>
-import { Toast, VButton, VModal, VSpace } from "@halo-dev/components";
 import SubmitButton from "@/components/button/SubmitButton.vue";
-import { computed, nextTick, onMounted, ref } from "vue";
-import type { Menu, MenuItem, Ref } from "@halo-dev/api-client";
-import { apiClient } from "@/utils/api-client";
-import { setFocus } from "@/formkit/utils/focus";
 import AnnotationsForm from "@/components/form/AnnotationsForm.vue";
-import { useI18n } from "vue-i18n";
+import { setFocus } from "@/formkit/utils/focus";
+import type { Menu, MenuItem, Ref } from "@halo-dev/api-client";
+import { coreApiClient } from "@halo-dev/api-client";
+import { Toast, VButton, VModal, VSpace } from "@halo-dev/components";
 import { cloneDeep } from "lodash-es";
+import { computed, nextTick, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 
 const props = withDefaults(
   defineProps<{
     menu: Menu;
-    parentMenuItem: MenuItem;
+    parentMenuItem?: MenuItem;
     menuItem?: MenuItem;
   }>(),
   {
@@ -87,34 +87,36 @@ const handleSaveMenuItem = async () => {
     }
 
     if (isUpdateMode) {
-      const { data } =
-        await apiClient.extension.menuItem.updateV1alpha1MenuItem({
-          name: formState.value.metadata.name,
-          menuItem: formState.value,
-        });
+      const { data } = await coreApiClient.menuItem.updateMenuItem({
+        name: formState.value.metadata.name,
+        menuItem: formState.value,
+      });
 
       emit("saved", data);
     } else {
-      const { data } =
-        await apiClient.extension.menuItem.createV1alpha1MenuItem({
-          menuItem: formState.value,
-        });
+      const { data } = await coreApiClient.menuItem.createMenuItem({
+        menuItem: formState.value,
+      });
 
       // if parent menu item is selected, add the new menu item to the parent menu item
       if (selectedParentMenuItem.value) {
-        const { data: menuItemToUpdate } =
-          await apiClient.extension.menuItem.getV1alpha1MenuItem({
+        const { data: parentMenuItem } =
+          await coreApiClient.menuItem.getMenuItem({
             name: selectedParentMenuItem.value,
           });
 
-        menuItemToUpdate.spec.children = [
-          ...(menuItemToUpdate.spec.children || []),
-          data.metadata.name,
-        ];
-
-        await apiClient.extension.menuItem.updateV1alpha1MenuItem({
-          name: menuItemToUpdate.metadata.name,
-          menuItem: menuItemToUpdate,
+        await coreApiClient.menuItem.patchMenuItem({
+          name: selectedParentMenuItem.value,
+          jsonPatchInner: [
+            {
+              op: "add",
+              path: "/spec/children",
+              value: [
+                ...(parentMenuItem.spec.children || []),
+                data.metadata.name,
+              ],
+            },
+          ],
         });
       }
 
@@ -220,7 +222,7 @@ onMounted(() => {
     }
   }
 
-  selectedParentMenuItem.value = props.parentMenuItem?.metadata.name;
+  selectedParentMenuItem.value = props.parentMenuItem?.metadata.name || "";
 
   setFocus("displayNameInput");
 });

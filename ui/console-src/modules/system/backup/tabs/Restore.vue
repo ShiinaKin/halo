@@ -1,10 +1,13 @@
 <script lang="ts" setup>
-import { apiClient } from "@/utils/api-client";
+import { formatDatetime } from "@/utils/date";
+import type { BackupFile } from "@halo-dev/api-client";
+import { consoleApiClient } from "@halo-dev/api-client";
 import {
   Dialog,
   Toast,
   VAlert,
   VButton,
+  VEntity,
   VEntityField,
   VLoading,
   VTabItem,
@@ -12,25 +15,15 @@ import {
 } from "@halo-dev/components";
 import { useMutation, useQuery } from "@tanstack/vue-query";
 import axios from "axios";
-import { computed } from "vue";
-import { ref } from "vue";
+import prettyBytes from "pretty-bytes";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useBackupFetch } from "../composables/use-backup";
-import BackupListItem from "../components/BackupListItem.vue";
-import type { Backup } from "packages/api-client/dist";
 
 const { t } = useI18n();
-const { data: backups } = useBackupFetch();
-
-const normalBackups = computed(() => {
-  return backups.value?.items.filter((item) => {
-    return item.status?.phase === "SUCCEEDED";
-  });
-});
 
 const complete = ref(false);
 const showUploader = ref(false);
-const activeTabId = ref("local");
+const activeTabId = ref<"local" | "remote" | "backups">("local");
 
 const onProcessCompleted = () => {
   Dialog.success({
@@ -58,7 +51,7 @@ const remoteDownloadUrl = ref("");
 const { isLoading: downloading, mutate: handleRemoteDownload } = useMutation({
   mutationKey: ["remote-download-restore"],
   mutationFn: async () => {
-    return await apiClient.migration.restoreBackup({
+    return await consoleApiClient.migration.restoreBackup({
       downloadUrl: remoteDownloadUrl.value,
     });
   },
@@ -68,14 +61,26 @@ const { isLoading: downloading, mutate: handleRemoteDownload } = useMutation({
   },
 });
 
-function handleRestoreFromBackup(backup: Backup) {
+const { data: backupFiles } = useQuery({
+  queryKey: ["backup-files", activeTabId],
+  queryFn: async () => {
+    const { data } = await consoleApiClient.migration.getBackupFiles();
+    return data;
+  },
+  enabled: computed(() => activeTabId.value === "backups"),
+});
+
+function handleRestoreFromBackup(backupFile: BackupFile) {
   Dialog.info({
     title: t("core.backup.operations.restore_by_backup.title"),
+    description: t("core.backup.operations.restore_by_backup.description", {
+      filename: backupFile.filename,
+    }),
     confirmText: t("core.common.buttons.confirm"),
-    showCancel: false,
+    cancelText: t("core.common.buttons.cancel"),
     async onConfirm() {
-      await apiClient.migration.restoreBackup({
-        backupName: backup.metadata.name,
+      await consoleApiClient.migration.restoreBackup({
+        filename: backupFile.filename,
       });
       setTimeout(() => {
         onProcessCompleted();
@@ -134,7 +139,7 @@ useQuery({
               maxNumberOfFiles: 1,
               allowedFileTypes: ['.zip'],
             }"
-            endpoint="/apis/api.console.migration.halo.run/v1alpha1/restorations"
+            endpoint="/apis/console.api.migration.halo.run/v1alpha1/restorations"
             width="100%"
             @uploaded="onProcessCompleted"
           />
@@ -173,17 +178,31 @@ useQuery({
           :label="$t('core.backup.restore.tabs.backup.label')"
         >
           <ul
-            class="box-border h-full w-full divide-y divide-gray-100 overflow-hidden rounded-base"
+            class="box-border h-full w-full divide-y divide-gray-100 overflow-hidden rounded-base border"
             role="list"
           >
-            <li v-for="(backup, index) in normalBackups" :key="index">
-              <BackupListItem :show-operations="false" :backup="backup">
+            <li v-for="backupFile in backupFiles" :key="backupFile.filename">
+              <VEntity>
+                <template #start>
+                  <VEntityField
+                    :title="backupFile.filename"
+                    :description="prettyBytes(backupFile.size || 0)"
+                  >
+                  </VEntityField>
+                </template>
                 <template #end>
-                  <VEntityField v-permission="['system:themes:manage']">
+                  <VEntityField v-if="backupFile.lastModifiedTime">
+                    <template #description>
+                      <span class="truncate text-xs tabular-nums text-gray-500">
+                        {{ formatDatetime(backupFile.lastModifiedTime) }}
+                      </span>
+                    </template>
+                  </VEntityField>
+                  <VEntityField v-permission="['system:migrations:manage']">
                     <template #description>
                       <VButton
                         size="sm"
-                        @click="handleRestoreFromBackup(backup)"
+                        @click="handleRestoreFromBackup(backupFile)"
                       >
                         {{
                           $t("core.backup.operations.restore_by_backup.button")
@@ -192,7 +211,7 @@ useQuery({
                     </template>
                   </VEntityField>
                 </template>
-              </BackupListItem>
+              </VEntity>
             </li>
           </ul>
         </VTabItem>

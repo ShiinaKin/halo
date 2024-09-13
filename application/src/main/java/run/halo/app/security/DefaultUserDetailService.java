@@ -1,12 +1,11 @@
 package run.halo.app.security;
 
 import static java.util.Objects.requireNonNullElse;
-import static run.halo.app.core.extension.User.GROUP;
-import static run.halo.app.core.extension.User.KIND;
 import static run.halo.app.security.authorization.AuthorityUtils.ANONYMOUS_ROLE_NAME;
 import static run.halo.app.security.authorization.AuthorityUtils.AUTHENTICATED_ROLE_NAME;
 import static run.halo.app.security.authorization.AuthorityUtils.ROLE_PREFIX;
 
+import lombok.Setter;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.ReactiveUserDetailsPasswordService;
@@ -14,14 +13,11 @@ import org.springframework.security.core.userdetails.ReactiveUserDetailsService;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import reactor.core.publisher.Mono;
-import run.halo.app.core.extension.Role;
-import run.halo.app.core.extension.RoleBinding.RoleRef;
-import run.halo.app.core.extension.RoleBinding.Subject;
 import run.halo.app.core.extension.service.RoleService;
 import run.halo.app.core.extension.service.UserService;
-import run.halo.app.extension.GroupKind;
 import run.halo.app.infra.exception.UserNotFoundException;
 import run.halo.app.security.authentication.login.HaloUser;
+import run.halo.app.security.authentication.twofactor.TwoFactorUtils;
 
 public class DefaultUserDetailService
     implements ReactiveUserDetailsService, ReactiveUserDetailsPasswordService {
@@ -29,6 +25,12 @@ public class DefaultUserDetailService
     private final UserService userService;
 
     private final RoleService roleService;
+
+    /**
+     * Indicates whether two-factor authentication is disabled.
+     */
+    @Setter
+    private boolean twoFactorAuthDisabled;
 
     public DefaultUserDetailService(UserService userService, RoleService roleService) {
         this.userService = userService;
@@ -48,13 +50,10 @@ public class DefaultUserDetailService
                 e -> new BadCredentialsException("Invalid Credentials"))
             .flatMap(user -> {
                 var name = user.getMetadata().getName();
-                var subject = new Subject(KIND, name, GROUP);
                 var userBuilder = User.withUsername(name)
                     .password(user.getSpec().getPassword())
                     .disabled(requireNonNullElse(user.getSpec().getDisabled(), false));
-                var setAuthorities = roleService.listRoleRefs(subject)
-                    .filter(this::isRoleRef)
-                    .map(RoleRef::getName)
+                var setAuthorities = roleService.getRolesByUsername(name)
                     // every authenticated user should have authenticated and anonymous roles.
                     .concatWithValues(AUTHENTICATED_ROLE_NAME, ANONYMOUS_ROLE_NAME)
                     .map(roleName -> new SimpleGrantedAuthority(ROLE_PREFIX + roleName))
@@ -63,20 +62,15 @@ public class DefaultUserDetailService
                     .doOnNext(userBuilder::authorities);
 
                 return setAuthorities.then(Mono.fromSupplier(() -> {
-                    var twoFactorAuthEnabled =
-                        requireNonNullElse(user.getSpec().getTwoFactorAuthEnabled(), false);
+                    var twoFactorAuthSettings = TwoFactorUtils.getTwoFactorAuthSettings(user);
                     return new HaloUser.Builder(userBuilder.build())
-                        .twoFactorAuthEnabled(twoFactorAuthEnabled)
+                        .twoFactorAuthEnabled(
+                            (!twoFactorAuthDisabled) && twoFactorAuthSettings.isAvailable()
+                        )
                         .totpEncryptedSecret(user.getSpec().getTotpEncryptedSecret())
                         .build();
                 }));
             });
-    }
-
-    private boolean isRoleRef(RoleRef roleRef) {
-        var roleGvk = new Role().groupVersionKind();
-        var gk = new GroupKind(roleRef.getApiGroup(), roleRef.getKind());
-        return gk.equals(roleGvk.groupKind());
     }
 
     private UserDetails withNewPassword(UserDetails userDetails, String newPassword) {

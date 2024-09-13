@@ -58,7 +58,7 @@ public class PostEndpoint implements CustomEndpoint {
 
     @Override
     public RouterFunction<ServerResponse> endpoint() {
-        final var tag = "api.console.halo.run/v1alpha1/Post";
+        final var tag = "PostV1alpha1Console";
         return SpringdocRouteBuilder.route()
             .GET("posts", this::listPost, builder -> {
                     builder.operationId("ListPosts")
@@ -403,7 +403,7 @@ public class PostEndpoint implements CustomEndpoint {
     /**
      * Convenient for testing, to avoid waiting too long for post published when testing.
      */
-    public void setMaxAttemptsWaitForPublish(int maxAttempts) {
+    void setMaxAttemptsWaitForPublish(int maxAttempts) {
         this.maxAttemptsWaitForPublish = maxAttempts;
     }
 }

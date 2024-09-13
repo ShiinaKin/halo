@@ -1,5 +1,7 @@
 package run.halo.app.plugin;
 
+import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
+import org.springframework.cache.CacheManager;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.security.web.server.context.ServerSecurityContextRepository;
@@ -13,6 +15,9 @@ import run.halo.app.infra.ExternalLinkProcessor;
 import run.halo.app.infra.ExternalUrlSupplier;
 import run.halo.app.notification.NotificationCenter;
 import run.halo.app.notification.NotificationReasonEmitter;
+import run.halo.app.plugin.extensionpoint.ExtensionGetter;
+import run.halo.app.security.LoginHandlerEnhancer;
+import run.halo.app.security.authentication.CryptoService;
 
 /**
  * Utility for creating shared application context.
@@ -56,6 +61,24 @@ public enum SharedApplicationContextFactory {
             rootContext.getBean(ExternalLinkProcessor.class));
         beanFactory.registerSingleton("postContentService",
             rootContext.getBean(PostContentService.class));
+        beanFactory.registerSingleton("cacheManager",
+            rootContext.getBean(CacheManager.class));
+        beanFactory.registerSingleton("loginHandlerEnhancer",
+            rootContext.getBean(LoginHandlerEnhancer.class));
+        rootContext.getBeanProvider(PluginsRootGetter.class)
+            .ifUnique(pluginsRootGetter ->
+                beanFactory.registerSingleton("pluginsRootGetter", pluginsRootGetter)
+            );
+        beanFactory.registerSingleton("extensionGetter",
+            rootContext.getBean(ExtensionGetter.class));
+        rootContext.getBeanProvider(CryptoService.class)
+            .ifUnique(
+                cryptoService -> beanFactory.registerSingleton("cryptoService", cryptoService)
+            );
+        rootContext.getBeanProvider(RateLimiterRegistry.class)
+            .ifUnique(rateLimiterRegistry ->
+                beanFactory.registerSingleton("rateLimiterRegistry", rateLimiterRegistry)
+            );
         // TODO add more shared instance here
 
         sharedContext.refresh();

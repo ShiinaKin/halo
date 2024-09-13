@@ -3,11 +3,15 @@ package run.halo.app.infra;
 import static org.apache.commons.lang3.BooleanUtils.isTrue;
 import static org.apache.commons.lang3.BooleanUtils.toStringTrueFalse;
 import static org.apache.commons.lang3.ObjectUtils.defaultIfNull;
+import static run.halo.app.core.extension.Role.ROLE_AGGREGATE_LABEL_PREFIX;
 import static run.halo.app.extension.index.IndexAttributeFactory.multiValueAttribute;
 import static run.halo.app.extension.index.IndexAttributeFactory.simpleAttribute;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import java.time.Instant;
+import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.apache.commons.lang3.BooleanUtils;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -19,9 +23,11 @@ import run.halo.app.content.Stats;
 import run.halo.app.core.extension.AnnotationSetting;
 import run.halo.app.core.extension.AuthProvider;
 import run.halo.app.core.extension.Counter;
+import run.halo.app.core.extension.Device;
 import run.halo.app.core.extension.Menu;
 import run.halo.app.core.extension.MenuItem;
 import run.halo.app.core.extension.Plugin;
+import run.halo.app.core.extension.RememberMeToken;
 import run.halo.app.core.extension.ReverseProxy;
 import run.halo.app.core.extension.Role;
 import run.halo.app.core.extension.RoleBinding;
@@ -29,10 +35,13 @@ import run.halo.app.core.extension.Setting;
 import run.halo.app.core.extension.Theme;
 import run.halo.app.core.extension.User;
 import run.halo.app.core.extension.UserConnection;
+import run.halo.app.core.extension.UserConnection.UserConnectionSpec;
 import run.halo.app.core.extension.attachment.Attachment;
 import run.halo.app.core.extension.attachment.Group;
+import run.halo.app.core.extension.attachment.LocalThumbnail;
 import run.halo.app.core.extension.attachment.Policy;
 import run.halo.app.core.extension.attachment.PolicyTemplate;
+import run.halo.app.core.extension.attachment.Thumbnail;
 import run.halo.app.core.extension.content.Category;
 import run.halo.app.core.extension.content.Comment;
 import run.halo.app.core.extension.content.Post;
@@ -49,6 +58,7 @@ import run.halo.app.core.extension.notification.Subscription;
 import run.halo.app.extension.ConfigMap;
 import run.halo.app.extension.DefaultSchemeManager;
 import run.halo.app.extension.DefaultSchemeWatcherManager;
+import run.halo.app.extension.MetadataOperator;
 import run.halo.app.extension.MetadataUtil;
 import run.halo.app.extension.Secret;
 import run.halo.app.extension.index.IndexSpec;
@@ -67,10 +77,52 @@ public class SchemeInitializer implements ApplicationListener<ApplicationContext
     public void onApplicationEvent(@NonNull ApplicationContextInitializedEvent event) {
         var schemeManager = createSchemeManager(event);
 
-        schemeManager.register(Role.class);
+        schemeManager.register(Role.class, is -> {
+            is.add(new IndexSpec()
+                .setName("labels.aggregateToRoles")
+                .setIndexFunc(multiValueAttribute(Role.class,
+                    role -> Optional.ofNullable(role.getMetadata().getLabels())
+                        .map(labels -> labels.keySet()
+                            .stream()
+                            .filter(key -> key.startsWith(ROLE_AGGREGATE_LABEL_PREFIX))
+                            .filter(key -> Boolean.parseBoolean(labels.get(key)))
+                            .map(
+                                key -> StringUtils.removeStart(key, ROLE_AGGREGATE_LABEL_PREFIX)
+                            )
+                            .collect(Collectors.toSet())
+                        )
+                        .orElseGet(Set::of)))
+            );
+        });
 
         // plugin.halo.run
-        schemeManager.register(Plugin.class);
+        schemeManager.register(Plugin.class, is -> {
+            is.add(new IndexSpec()
+                .setName("spec.displayName")
+                .setIndexFunc(
+                    simpleAttribute(Plugin.class, plugin -> Optional.ofNullable(plugin.getSpec())
+                        .map(Plugin.PluginSpec::getDisplayName)
+                        .orElse(null))
+                )
+            );
+            is.add(new IndexSpec()
+                .setName("spec.description")
+                .setIndexFunc(
+                    simpleAttribute(Plugin.class, plugin -> Optional.ofNullable(plugin.getSpec())
+                        .map(Plugin.PluginSpec::getDescription)
+                        .orElse(null))
+                )
+            );
+            is.add(new IndexSpec()
+                .setName("spec.enabled")
+                .setIndexFunc(
+                    simpleAttribute(Plugin.class, plugin -> Optional.ofNullable(plugin.getSpec())
+                        .map(Plugin.PluginSpec::getEnabled)
+                        .map(Object::toString)
+                        .orElse(Boolean.FALSE.toString()))
+                )
+            );
+        });
         schemeManager.register(SearchEngine.class);
         schemeManager.register(ExtensionPointDefinition.class, indexSpecs -> {
             indexSpecs.add(new IndexSpec()
@@ -79,26 +131,53 @@ public class SchemeInitializer implements ApplicationListener<ApplicationContext
                     definition -> definition.getSpec().getClassName())
                 ));
         });
-        schemeManager.register(ExtensionDefinition.class);
+        schemeManager.register(ExtensionDefinition.class, indexSpecs -> {
+            indexSpecs.add(new IndexSpec()
+                .setName("spec.extensionPointName")
+                .setIndexFunc(simpleAttribute(ExtensionDefinition.class,
+                    definition -> definition.getSpec().getExtensionPointName())
+                ));
+        });
 
-        schemeManager.register(RoleBinding.class);
+        schemeManager.register(RoleBinding.class, is -> {
+            is.add(new IndexSpec()
+                .setName("roleRef.name")
+                .setIndexFunc(simpleAttribute(RoleBinding.class,
+                    roleBinding -> roleBinding.getRoleRef().getName())
+                )
+            );
+            is.add(new IndexSpec()
+                .setName("subjects")
+                .setIndexFunc(multiValueAttribute(RoleBinding.class,
+                    roleBinding -> roleBinding.getSubjects().stream()
+                        .map(RoleBinding.Subject::toString)
+                        .collect(Collectors.toSet()))
+                )
+            );
+        });
         schemeManager.register(User.class, indexSpecs -> {
             indexSpecs.add(new IndexSpec()
                 .setName("spec.displayName")
                 .setIndexFunc(
                     simpleAttribute(User.class, user -> user.getSpec().getDisplayName())));
             indexSpecs.add(new IndexSpec()
-                .setName(User.USER_RELATED_ROLES_INDEX)
-                .setIndexFunc(multiValueAttribute(User.class, user -> {
-                    var roleNamesAnno = MetadataUtil.nullSafeAnnotations(user)
-                        .get(User.ROLE_NAMES_ANNO);
-                    if (StringUtils.isBlank(roleNamesAnno)) {
-                        return Set.of();
-                    }
-                    return JsonUtils.jsonToObject(roleNamesAnno,
-                        new TypeReference<>() {
-                        });
+                .setName("spec.email")
+                .setIndexFunc(simpleAttribute(User.class, user -> {
+                    var email = user.getSpec().getEmail();
+                    return StringUtils.isBlank(email) ? null : email;
                 })));
+            indexSpecs.add(new IndexSpec()
+                .setName(User.USER_RELATED_ROLES_INDEX)
+                .setIndexFunc(multiValueAttribute(User.class, user ->
+                    Optional.ofNullable(user.getMetadata())
+                        .map(MetadataOperator::getAnnotations)
+                        .map(annotations -> annotations.get(User.ROLE_NAMES_ANNO))
+                        .filter(StringUtils::isNotBlank)
+                        .map(rolesJson -> JsonUtils.jsonToObject(rolesJson,
+                            new TypeReference<Set<String>>() {
+                            })
+                        )
+                        .orElseGet(Set::of))));
         });
         schemeManager.register(ReverseProxy.class);
         schemeManager.register(Setting.class);
@@ -167,10 +246,6 @@ public class SchemeInitializer implements ApplicationListener<ApplicationContext
                     return contributors == null ? Set.of() : Set.copyOf(contributors);
                 })));
             indexSpecs.add(new IndexSpec()
-                .setName("status.categories")
-                .setIndexFunc(
-                    simpleAttribute(Post.class, post -> post.getStatusOrDefault().getExcerpt())));
-            indexSpecs.add(new IndexSpec()
                 .setName("status.phase")
                 .setIndexFunc(
                     simpleAttribute(Post.class, post -> post.getStatusOrDefault().getPhase())));
@@ -184,6 +259,14 @@ public class SchemeInitializer implements ApplicationListener<ApplicationContext
                     var lastModifyTime = post.getStatus().getLastModifyTime();
                     return lastModifyTime == null ? null : lastModifyTime.toString();
                 })));
+            indexSpecs.add(new IndexSpec()
+                .setName("status.hideFromList")
+                .setIndexFunc(simpleAttribute(Post.class, post -> {
+                    var hidden = post.getStatus().getHideFromList();
+                    // only index when hidden is true
+                    return (hidden == null || !hidden) ? null : BooleanUtils.TRUE;
+                }))
+            );
             indexSpecs.add(new IndexSpec()
                 .setName(Post.REQUIRE_SYNC_ON_STARTUP_INDEX_NAME)
                 .setIndexFunc(simpleAttribute(Post.class, post -> {
@@ -230,6 +313,19 @@ public class SchemeInitializer implements ApplicationListener<ApplicationContext
                 .setName("spec.priority")
                 .setIndexFunc(simpleAttribute(Category.class,
                     category -> defaultIfNull(category.getSpec().getPriority(), 0).toString())));
+            indexSpecs.add(new IndexSpec()
+                .setName("spec.children")
+                .setIndexFunc(multiValueAttribute(Category.class, category -> {
+                    var children = category.getSpec().getChildren();
+                    return children == null ? Set.of() : Set.copyOf(children);
+                }))
+            );
+            indexSpecs.add(new IndexSpec()
+                .setName("spec.hideFromList")
+                .setIndexFunc(simpleAttribute(Category.class,
+                    category -> toStringTrueFalse(isTrue(category.getSpec().isHideFromList()))
+                ))
+            );
         });
         schemeManager.register(Tag.class, indexSpecs -> {
             indexSpecs.add(new IndexSpec()
@@ -374,7 +470,85 @@ public class SchemeInitializer implements ApplicationListener<ApplicationContext
                     return null;
                 })));
         });
-        schemeManager.register(SinglePage.class);
+        schemeManager.register(SinglePage.class, is -> {
+            is.add(new IndexSpec()
+                .setName("spec.publishTime")
+                .setIndexFunc(
+                    simpleAttribute(SinglePage.class, page -> Optional.ofNullable(page.getSpec())
+                        .map(SinglePage.SinglePageSpec::getPublishTime)
+                        .map(Instant::toString)
+                        .orElse(null))
+                )
+            );
+            is.add(new IndexSpec()
+                .setName("spec.title")
+                .setIndexFunc(
+                    simpleAttribute(SinglePage.class, page -> Optional.ofNullable(page.getSpec())
+                        .map(SinglePage.SinglePageSpec::getTitle)
+                        .orElse(null))
+                )
+            );
+            is.add(new IndexSpec()
+                .setName("spec.slug")
+                .setUnique(false)
+                .setIndexFunc(
+                    simpleAttribute(SinglePage.class, page -> Optional.ofNullable(page.getSpec())
+                        .map(SinglePage.SinglePageSpec::getSlug)
+                        .orElse(null))
+                )
+            );
+            is.add(new IndexSpec()
+                .setName("spec.visible")
+                .setIndexFunc(
+                    simpleAttribute(SinglePage.class, page -> Optional.ofNullable(page.getSpec())
+                        .map(SinglePage.SinglePageSpec::getVisible)
+                        .map(Post.VisibleEnum::name)
+                        .orElse(null))
+                )
+            );
+            is.add(new IndexSpec()
+                .setName("spec.pinned")
+                .setIndexFunc(
+                    simpleAttribute(SinglePage.class, page -> Optional.ofNullable(page.getSpec())
+                        .map(SinglePage.SinglePageSpec::getPinned)
+                        .map(Object::toString)
+                        .orElse(Boolean.FALSE.toString())))
+            );
+            is.add(new IndexSpec()
+                .setName("spec.priority")
+                .setIndexFunc(simpleAttribute(SinglePage.class,
+                    page -> Optional.ofNullable(page.getSpec())
+                        .map(SinglePage.SinglePageSpec::getPriority)
+                        .map(Object::toString)
+                        .orElse(Integer.toString(0)))
+                )
+            );
+            is.add(new IndexSpec()
+                .setName("status.excerpt")
+                .setIndexFunc(
+                    simpleAttribute(SinglePage.class, page -> Optional.ofNullable(page.getStatus())
+                        .map(SinglePage.SinglePageStatus::getExcerpt)
+                        .orElse(null))
+                )
+            );
+            is.add(new IndexSpec()
+                .setName("status.phase")
+                .setIndexFunc(
+                    simpleAttribute(SinglePage.class, page -> Optional.ofNullable(page.getStatus())
+                        .map(SinglePage.SinglePageStatus::getPhase)
+                        .orElse(null))
+                )
+            );
+            is.add(new IndexSpec()
+                .setName("status.contributors")
+                .setIndexFunc(multiValueAttribute(SinglePage.class,
+                    page -> Optional.ofNullable(page.getStatus())
+                        .map(SinglePage.SinglePageStatus::getContributors)
+                        .map(Set::copyOf)
+                        .orElse(null))
+                )
+            );
+        });
         // storage.halo.run
         schemeManager.register(Group.class);
         schemeManager.register(Policy.class);
@@ -416,16 +590,73 @@ public class SchemeInitializer implements ApplicationListener<ApplicationContext
                         return size != null ? size.toString() : null;
                     }))
             );
+            indexSpecs.add(new IndexSpec()
+                .setName("status.permalink")
+                .setIndexFunc(simpleAttribute(Attachment.class, attachment -> {
+                    var status = attachment.getStatus();
+                    return status == null ? null : status.getPermalink();
+                }))
+            );
         });
         schemeManager.register(PolicyTemplate.class);
+        schemeManager.register(Thumbnail.class, indexSpec -> {
+            indexSpec.add(new IndexSpec()
+                .setName(Thumbnail.ID_INDEX)
+                .setIndexFunc(simpleAttribute(Thumbnail.class, Thumbnail::idIndexFunc))
+            );
+        });
+        schemeManager.register(LocalThumbnail.class, indexSpec -> {
+            indexSpec.add(new IndexSpec()
+                .setName("spec.imageSignature")
+                .setIndexFunc(simpleAttribute(LocalThumbnail.class,
+                    thumbnail -> thumbnail.getSpec().getImageSignature())
+                ));
+            indexSpec.add(new IndexSpec()
+                .setName("spec.thumbSignature")
+                .setUnique(true)
+                .setIndexFunc(simpleAttribute(LocalThumbnail.class,
+                    thumbnail -> thumbnail.getSpec().getThumbSignature())
+                ));
+        });
         // metrics.halo.run
         schemeManager.register(Counter.class);
         // auth.halo.run
         schemeManager.register(AuthProvider.class);
-        schemeManager.register(UserConnection.class);
+        schemeManager.register(UserConnection.class, is -> {
+            is.add(new IndexSpec()
+                .setName("spec.username")
+                .setIndexFunc(simpleAttribute(UserConnection.class,
+                    connection -> Optional.ofNullable(connection.getSpec())
+                        .map(UserConnectionSpec::getUsername)
+                        .orElse(null)
+                )));
+        });
 
         // security.halo.run
         schemeManager.register(PersonalAccessToken.class);
+        schemeManager.register(RememberMeToken.class, indexSpecs -> {
+            indexSpecs.add(new IndexSpec()
+                .setName("spec.series")
+                .setUnique(true)
+                .setIndexFunc(simpleAttribute(RememberMeToken.class,
+                    token -> token.getSpec().getSeries())
+                )
+            );
+            indexSpecs.add(new IndexSpec()
+                .setName("spec.username")
+                .setIndexFunc(simpleAttribute(RememberMeToken.class,
+                    token -> token.getSpec().getUsername())
+                )
+            );
+        });
+        schemeManager.register(Device.class, indexSpecs -> {
+            indexSpecs.add(new IndexSpec()
+                .setName("spec.principalName")
+                .setIndexFunc(simpleAttribute(Device.class,
+                    device -> device.getSpec().getPrincipalName())
+                )
+            );
+        });
 
         // migration.halo.run
         schemeManager.register(Backup.class);
@@ -478,16 +709,6 @@ public class SchemeInitializer implements ApplicationListener<ApplicationContext
                 .setName("spec.recipient")
                 .setIndexFunc(simpleAttribute(Notification.class,
                     notification -> notification.getSpec().getRecipient()))
-            );
-            indexSpecs.add(new IndexSpec()
-                .setName("spec.title")
-                .setIndexFunc(simpleAttribute(Notification.class,
-                    notification -> notification.getSpec().getTitle()))
-            );
-            indexSpecs.add(new IndexSpec()
-                .setName("spec.rawContent")
-                .setIndexFunc(simpleAttribute(Notification.class,
-                    notification -> notification.getSpec().getRawContent()))
             );
         });
     }

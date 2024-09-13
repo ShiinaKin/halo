@@ -13,7 +13,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -60,8 +60,8 @@ import run.halo.app.infra.exception.UnsatisfiedAttributeValueException;
 import run.halo.app.infra.utils.FileUtils;
 import run.halo.app.infra.utils.VersionUtils;
 import run.halo.app.plugin.PluginConst;
-import run.halo.app.plugin.PluginProperties;
 import run.halo.app.plugin.PluginUtils;
+import run.halo.app.plugin.PluginsRootGetter;
 import run.halo.app.plugin.SpringPluginManager;
 import run.halo.app.plugin.YamlPluginDescriptorFinder;
 import run.halo.app.plugin.YamlPluginFinder;
@@ -78,7 +78,7 @@ public class PluginServiceImpl implements PluginService, InitializingBean, Dispo
 
     private final SystemVersionSupplier systemVersion;
 
-    private final PluginProperties pluginProperties;
+    private final PluginsRootGetter pluginsRootGetter;
 
     private final SpringPluginManager pluginManager;
 
@@ -90,15 +90,29 @@ public class PluginServiceImpl implements PluginService, InitializingBean, Dispo
 
     private final Scheduler scheduler = Schedulers.boundedElastic();
 
-    public PluginServiceImpl(ReactiveExtensionClient client, SystemVersionSupplier systemVersion,
-        PluginProperties pluginProperties, SpringPluginManager pluginManager) {
+    private Clock clock = Clock.systemUTC();
+
+    public PluginServiceImpl(ReactiveExtensionClient client,
+        SystemVersionSupplier systemVersion,
+        PluginsRootGetter pluginsRootGetter,
+        SpringPluginManager pluginManager) {
         this.client = client;
         this.systemVersion = systemVersion;
-        this.pluginProperties = pluginProperties;
+        this.pluginsRootGetter = pluginsRootGetter;
         this.pluginManager = pluginManager;
 
         this.jsBundleCache = new BundleCache(".js");
         this.cssBundleCache = new BundleCache(".css");
+    }
+
+    /**
+     * The method is only for testing.
+     *
+     * @param clock new clock
+     */
+    void setClock(Clock clock) {
+        Assert.notNull(clock, "Clock must not be null");
+        this.clock = clock;
     }
 
     @Override
@@ -216,10 +230,16 @@ public class PluginServiceImpl implements PluginService, InitializingBean, Dispo
     public Flux<DataBuffer> uglifyJsBundle() {
         var startedPlugins = List.copyOf(pluginManager.getStartedPlugins());
         String plugins = """
-            this.enabledPluginNames = [%s];
+            this.enabledPlugins = [%s]
             """.formatted(startedPlugins.stream()
-            .map(PluginWrapper::getPluginId)
-            .collect(Collectors.joining("','", "'", "'")));
+            .map(plugin -> """
+                {
+                  "name": "%s",
+                  "version": "%s"
+                }
+                """.formatted(plugin.getPluginId(), plugin.getDescriptor().getVersion())
+            )
+            .collect(Collectors.joining(", ")));
         return Flux.fromIterable(startedPlugins)
             .mapNotNull(pluginWrapper -> {
                 var pluginName = pluginWrapper.getPluginId();
@@ -269,6 +289,9 @@ public class PluginServiceImpl implements PluginService, InitializingBean, Dispo
 
     @Override
     public Mono<String> generateBundleVersion() {
+        if (pluginManager.isDevelopment()) {
+            return Mono.just(String.valueOf(clock.instant().toEpochMilli()));
+        }
         return Flux.fromIterable(new ArrayList<>(pluginManager.getStartedPlugins()))
             .sort(Comparator.comparing(PluginWrapper::getPluginId))
             .map(pw -> pw.getPluginId() + ':' + pw.getDescriptor().getVersion())
@@ -408,7 +431,7 @@ public class PluginServiceImpl implements PluginService, InitializingBean, Dispo
         return Mono.fromCallable(
                 () -> {
                     var fileName = PluginUtils.generateFileName(plugin);
-                    var pluginRoot = Paths.get(pluginProperties.getPluginsRoot());
+                    var pluginRoot = pluginsRootGetter.get();
                     try {
                         Files.createDirectories(pluginRoot);
                     } catch (IOException e) {
@@ -533,15 +556,22 @@ public class PluginServiceImpl implements PluginService, InitializingBean, Dispo
                             // double check of the resource
                             .filter(res -> isResourceMatch(res, newFilename))
                             .switchIfEmpty(Mono.using(
-                                    () -> tempDir.resolve(newFilename),
+                                    () -> {
+                                        if (!Files.exists(tempDir)) {
+                                            Files.createDirectories(tempDir);
+                                        }
+                                        return tempDir.resolve(newFilename);
+                                    },
                                     path -> DataBufferUtils.write(content, path,
                                             CREATE, TRUNCATE_EXISTING)
                                         .then(Mono.<Resource>fromSupplier(
                                             () -> new FileSystemResource(path)
                                         )),
                                     path -> {
-                                        // clean up old resource
-                                        cleanUp(this.resource);
+                                        if (shouldCleanUp(path)) {
+                                            // clean up old resource
+                                            cleanUp(this.resource);
+                                        }
                                     })
                                 .subscribeOn(scheduler)
                                 .doOnNext(newResource -> this.resource = newResource)
@@ -561,6 +591,18 @@ public class PluginServiceImpl implements PluginService, InitializingBean, Dispo
                         });
                     }
                 });
+        }
+
+        private boolean shouldCleanUp(Path newPath) {
+            if (this.resource == null || !this.resource.exists()) {
+                return false;
+            }
+            try {
+                var oldPath = this.resource.getFile().toPath();
+                return !oldPath.equals(newPath);
+            } catch (IOException e) {
+                return false;
+            }
         }
 
         private static void cleanUp(Resource resource) {

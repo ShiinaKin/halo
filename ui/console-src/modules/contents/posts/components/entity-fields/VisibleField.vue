@@ -1,6 +1,6 @@
 <script lang="ts" setup>
-import { apiClient } from "@/utils/api-client";
 import type { ListedPost, Post } from "@halo-dev/api-client";
+import { coreApiClient } from "@halo-dev/api-client";
 import { IconEye, IconEyeOff, Toast, VEntityField } from "@halo-dev/components";
 import { useMutation, useQueryClient } from "@tanstack/vue-query";
 import { useI18n } from "vue-i18n";
@@ -17,25 +17,21 @@ withDefaults(
 
 const { mutate: changeVisibleMutation } = useMutation({
   mutationFn: async (post: Post) => {
-    const { data } =
-      await apiClient.extension.post.getContentHaloRunV1alpha1Post({
-        name: post.metadata.name,
-      });
-    data.spec.visible = data.spec.visible === "PRIVATE" ? "PUBLIC" : "PRIVATE";
-    await apiClient.extension.post.updateContentHaloRunV1alpha1Post(
-      {
-        name: post.metadata.name,
-        post: data,
-      },
-      {
-        mute: true,
-      }
-    );
-    await queryClient.invalidateQueries({ queryKey: ["posts"] });
+    return await coreApiClient.content.post.patchPost({
+      name: post.metadata.name,
+      jsonPatchInner: [
+        {
+          op: "add",
+          path: "/spec/visible",
+          value: post.spec.visible === "PRIVATE" ? "PUBLIC" : "PRIVATE",
+        },
+      ],
+    });
   },
   retry: 3,
   onSuccess: () => {
     Toast.success(t("core.common.toast.operation_success"));
+    queryClient.invalidateQueries({ queryKey: ["posts"] });
   },
   onError: () => {
     Toast.error(t("core.common.toast.operation_failed"));

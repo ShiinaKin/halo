@@ -1,35 +1,34 @@
 <script lang="ts" setup>
-import ThemePreviewListItem from "./ThemePreviewListItem.vue";
 import { useSettingFormConvert } from "@console/composables/use-setting-form";
 import { useThemeStore } from "@console/stores/theme";
-import { apiClient, axiosInstance } from "@/utils/api-client";
 import type {
   ConfigMap,
   Setting,
   SettingForm,
   Theme,
 } from "@halo-dev/api-client";
+import { consoleApiClient } from "@halo-dev/api-client";
 import {
-  VModal,
+  IconComputer,
   IconLink,
   IconPalette,
-  IconSettings,
-  IconArrowLeft,
-  VTabbar,
-  VButton,
-  IconComputer,
   IconPhone,
-  IconTablet,
   IconRefreshLine,
+  IconSettings,
+  IconTablet,
   Toast,
+  VButton,
   VLoading,
+  VModal,
+  VTabbar,
 } from "@halo-dev/components";
-import { storeToRefs } from "pinia";
-import { computed, markRaw, ref, toRaw } from "vue";
-import { useI18n } from "vue-i18n";
-import { OverlayScrollbarsComponent } from "overlayscrollbars-vue";
 import { useQuery } from "@tanstack/vue-query";
-import { onMounted } from "vue";
+import { OverlayScrollbarsComponent } from "overlayscrollbars-vue";
+import { storeToRefs } from "pinia";
+import { computed, markRaw, onMounted, ref, toRaw } from "vue";
+import { useI18n } from "vue-i18n";
+import ThemePreviewListItem from "./ThemePreviewListItem.vue";
+import StickyBlock from "@/components/sticky-block/StickyBlock.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -55,6 +54,7 @@ interface SettingTab {
 
 const { activatedTheme } = storeToRefs(useThemeStore());
 
+const previewFrame = ref<HTMLIFrameElement | null>(null);
 const themesVisible = ref(false);
 const switching = ref(false);
 const selectedTheme = ref<Theme>();
@@ -62,7 +62,7 @@ const selectedTheme = ref<Theme>();
 const { data: themes } = useQuery<Theme[]>({
   queryKey: ["themes"],
   queryFn: async () => {
-    const { data } = await apiClient.theme.listThemes({
+    const { data } = await consoleApiClient.theme.theme.listThemes({
       page: 0,
       size: 0,
       uninstalled: false,
@@ -100,26 +100,6 @@ const modalTitle = computed(() => {
   });
 });
 
-const {
-  data: previewHTML,
-  isLoading,
-  refetch: refetchPreviewHTML,
-} = useQuery({
-  queryKey: ["site-preview", previewUrl],
-  queryFn: async () => {
-    const { data } = await axiosInstance.get(previewUrl.value, {
-      headers: {
-        Accept: "text/html",
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
-        Expires: "0",
-      },
-    });
-    return data;
-  },
-  enabled: computed(() => !!previewUrl.value),
-});
-
 // theme settings
 const saving = ref(false);
 const settingTabs = ref<SettingTab[]>([] as SettingTab[]);
@@ -129,7 +109,7 @@ const settingsVisible = ref(false);
 const { data: setting } = useQuery<Setting>({
   queryKey: ["theme-setting", selectedTheme],
   queryFn: async () => {
-    const { data } = await apiClient.theme.fetchThemeSetting({
+    const { data } = await consoleApiClient.theme.theme.fetchThemeSetting({
       name: selectedTheme?.value?.metadata.name as string,
     });
 
@@ -154,7 +134,7 @@ const { data: setting } = useQuery<Setting>({
 const { data: configMap, refetch: handleFetchConfigMap } = useQuery<ConfigMap>({
   queryKey: ["theme-configMap", selectedTheme],
   queryFn: async () => {
-    const { data } = await apiClient.theme.fetchThemeConfig({
+    const { data } = await consoleApiClient.theme.theme.fetchThemeConfig({
       name: selectedTheme?.value?.metadata.name as string,
     });
     return data;
@@ -170,6 +150,10 @@ const { formSchema, configMapFormData, convertToSave } = useSettingFormConvert(
   activeSettingTab
 );
 
+const handleRefresh = () => {
+  previewFrame.value?.contentWindow?.location.reload();
+};
+
 const handleSaveConfigMap = async () => {
   saving.value = true;
 
@@ -180,7 +164,7 @@ const handleSaveConfigMap = async () => {
     return;
   }
 
-  await apiClient.theme.updateThemeConfig({
+  await consoleApiClient.theme.theme.updateThemeConfig({
     name: selectedTheme?.value?.metadata.name,
     configMap: configMapToUpdate,
   });
@@ -191,7 +175,7 @@ const handleSaveConfigMap = async () => {
 
   saving.value = false;
 
-  refetchPreviewHTML();
+  handleRefresh();
 };
 
 const handleOpenSettings = (theme?: Theme) => {
@@ -272,7 +256,7 @@ const iframeClasses = computed(() => {
           content: $t('core.common.buttons.refresh'),
           delay: 300,
         }"
-        @click="refetchPreviewHTML()"
+        @click="handleRefresh()"
       >
         <IconRefreshLine />
       </span>
@@ -349,21 +333,23 @@ const iframeClasses = computed(() => {
                     />
                   </FormKit>
                 </div>
-                <div v-permission="['system:themes:manage']" class="pt-5">
-                  <div class="flex justify-start">
-                    <VButton
-                      :loading="saving"
-                      type="secondary"
-                      @click="
-                        $formkit.submit(
-                          `preview-setting-${activeSettingTab}` || ''
-                        )
-                      "
-                    >
-                      {{ $t("core.common.buttons.save") }}
-                    </VButton>
-                  </div>
-                </div>
+                <StickyBlock
+                  v-permission="['system:themes:manage']"
+                  class="-mx-4 -mb-4 -mr-3 rounded-b-base rounded-t-lg bg-white p-4 pt-5"
+                  position="bottom"
+                >
+                  <VButton
+                    :loading="saving"
+                    type="secondary"
+                    @click="
+                      $formkit.submit(
+                        `preview-setting-${activeSettingTab}` || ''
+                      )
+                    "
+                  >
+                    {{ $t("core.common.buttons.save") }}
+                  </VButton>
+                </StickyBlock>
               </div>
             </div>
           </transition>
@@ -399,36 +385,18 @@ const iframeClasses = computed(() => {
               </li>
             </ul>
           </transition>
-          <transition
-            enter-active-class="transform transition ease-in-out duration-300"
-            enter-from-class="translate-y-full"
-            enter-to-class="translate-y-0"
-            leave-active-class="transform transition ease-in-out duration-300"
-            leave-from-class="translate-y-0"
-            leave-to-class="translate-y-full"
-          >
-            <div v-if="settingsVisible" class="fixed bottom-2 left-2">
-              <VButton
-                size="md"
-                circle
-                type="primary"
-                @click="handleOpenThemes"
-              >
-                <IconArrowLeft />
-              </VButton>
-            </div>
-          </transition>
         </OverlayScrollbarsComponent>
       </transition>
       <div
         class="flex h-full flex-1 items-center justify-center transition-all duration-300"
       >
-        <VLoading v-if="isLoading" />
+        <VLoading v-if="!previewUrl" />
         <iframe
           v-else
+          ref="previewFrame"
           class="border-none transition-all duration-500"
           :class="iframeClasses"
-          :srcdoc="previewHTML"
+          :src="previewUrl"
         ></iframe>
       </div>
     </div>

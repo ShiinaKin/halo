@@ -2,13 +2,13 @@
 import AnnotationsForm from "@/components/form/AnnotationsForm.vue";
 import { singlePageLabels } from "@/constants/labels";
 import { FormType } from "@/types/slug";
-import { apiClient } from "@/utils/api-client";
 import { toDatetimeLocal, toISOString } from "@/utils/date";
 import { randomUUID } from "@/utils/id";
 import useSlugify from "@console/composables/use-slugify";
 import { useThemeCustomTemplates } from "@console/modules/interface/themes/composables/use-theme";
 import { submitForm } from "@formkit/core";
 import type { SinglePage } from "@halo-dev/api-client";
+import { coreApiClient } from "@halo-dev/api-client";
 import {
   IconRefreshLine,
   Toast,
@@ -134,11 +134,9 @@ const handleSave = async () => {
 
     const { data } = isUpdateMode
       ? await singlePageUpdateMutate(formState.value)
-      : await apiClient.extension.singlePage.createContentHaloRunV1alpha1SinglePage(
-          {
-            singlePage: formState.value,
-          }
-        );
+      : await coreApiClient.content.singlePage.createSinglePage({
+          singlePage: formState.value,
+        });
 
     formState.value = data;
     emit("saved", data);
@@ -183,13 +181,10 @@ const handlePublish = async () => {
       singlePageToUpdate.spec.headSnapshot;
     singlePageToUpdate.spec.publish = true;
 
-    const { data } =
-      await apiClient.extension.singlePage.updateContentHaloRunV1alpha1SinglePage(
-        {
-          name: formState.value.metadata.name,
-          singlePage: singlePageToUpdate,
-        }
-      );
+    const { data } = await coreApiClient.content.singlePage.updateSinglePage({
+      name: formState.value.metadata.name,
+      singlePage: singlePageToUpdate,
+    });
 
     formState.value = data;
 
@@ -210,20 +205,17 @@ const handleUnpublish = async () => {
     publishCanceling.value = true;
 
     const { data: singlePage } =
-      await apiClient.extension.singlePage.getContentHaloRunV1alpha1SinglePage({
+      await coreApiClient.content.singlePage.getSinglePage({
         name: formState.value.metadata.name,
       });
 
     const singlePageToUpdate = cloneDeep(singlePage);
     singlePageToUpdate.spec.publish = false;
 
-    const { data } =
-      await apiClient.extension.singlePage.updateContentHaloRunV1alpha1SinglePage(
-        {
-          name: formState.value.metadata.name,
-          singlePage: singlePageToUpdate,
-        }
-      );
+    const { data } = await coreApiClient.content.singlePage.updateSinglePage({
+      name: formState.value.metadata.name,
+      singlePage: singlePageToUpdate,
+    });
 
     formState.value = data;
 
@@ -336,15 +328,11 @@ const { handleGenerateSlug } = useSlugify(
             </FormKit>
             <FormKit
               v-model="formState.spec.excerpt.autoGenerate"
-              :options="[
-                { label: $t('core.common.radio.yes'), value: true },
-                { label: $t('core.common.radio.no'), value: false },
-              ]"
               name="autoGenerate"
               :label="
                 $t('core.page.settings.fields.auto_generate_excerpt.label')
               "
-              type="radio"
+              type="checkbox"
             >
             </FormKit>
             <FormKit
@@ -374,23 +362,15 @@ const { handleGenerateSlug } = useSlugify(
           <div class="mt-5 divide-y divide-gray-100 md:col-span-3 md:mt-0">
             <FormKit
               v-model="formState.spec.allowComment"
-              :options="[
-                { label: $t('core.common.radio.yes'), value: true },
-                { label: $t('core.common.radio.no'), value: false },
-              ]"
               name="allowComment"
               :label="$t('core.page.settings.fields.allow_comment.label')"
-              type="radio"
+              type="checkbox"
             ></FormKit>
             <FormKit
               v-model="formState.spec.pinned"
-              :options="[
-                { label: $t('core.common.radio.yes'), value: true },
-                { label: $t('core.common.radio.no'), value: false },
-              ]"
               :label="$t('core.page.settings.fields.pinned.label')"
               name="pinned"
-              type="radio"
+              type="checkbox"
             ></FormKit>
             <FormKit
               v-model="formState.spec.visible"

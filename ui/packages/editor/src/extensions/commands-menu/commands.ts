@@ -1,15 +1,15 @@
 import {
   Extension,
   VueRenderer,
-  type Editor,
   type AnyExtension,
+  type Editor,
   type Range,
 } from "@/tiptap/vue-3";
-import Suggestion from "@tiptap/suggestion";
 import type { CommandMenuItem } from "@/types";
+import Suggestion from "@tiptap/suggestion";
 import type { Instance } from "tippy.js";
-import CommandsView from "./CommandsView.vue";
 import tippy from "tippy.js";
+import CommandsView from "./CommandsView.vue";
 
 export default Extension.create({
   name: "commands-menu",
@@ -60,7 +60,7 @@ export default Extension.create({
               popup = tippy("body", {
                 getReferenceClientRect: props.clientRect,
                 appendTo: () => document.body,
-                content: component.element,
+                content: component.element as Element,
                 showOnCreate: true,
                 interactive: true,
                 trigger: "manual",

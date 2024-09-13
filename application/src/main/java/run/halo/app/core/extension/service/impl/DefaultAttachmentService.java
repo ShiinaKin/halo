@@ -1,10 +1,14 @@
 package run.halo.app.core.extension.service.impl;
 
 import java.net.URI;
+import java.net.URL;
+import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.multipart.FilePart;
@@ -29,19 +33,24 @@ import run.halo.app.core.extension.attachment.endpoint.UploadOption;
 import run.halo.app.core.extension.service.AttachmentService;
 import run.halo.app.extension.ConfigMap;
 import run.halo.app.extension.ReactiveExtensionClient;
-import run.halo.app.plugin.ExtensionComponentsFinder;
+import run.halo.app.infra.ReactiveUrlDataBufferFetcher;
+import run.halo.app.plugin.extensionpoint.ExtensionGetter;
 
 @Component
 public class DefaultAttachmentService implements AttachmentService {
 
     private final ReactiveExtensionClient client;
 
-    private final ExtensionComponentsFinder extensionComponentsFinder;
+    private final ExtensionGetter extensionGetter;
+
+    private final ReactiveUrlDataBufferFetcher dataBufferFetcher;
 
     public DefaultAttachmentService(ReactiveExtensionClient client,
-        ExtensionComponentsFinder extensionComponentsFinder) {
+        ExtensionGetter extensionGetter,
+        ReactiveUrlDataBufferFetcher dataBufferFetcher) {
         this.client = client;
-        this.extensionComponentsFinder = extensionComponentsFinder;
+        this.extensionGetter = extensionGetter;
+        this.dataBufferFetcher = dataBufferFetcher;
     }
 
     @Override
@@ -61,12 +70,9 @@ public class DefaultAttachmentService implements AttachmentService {
                 return client.get(ConfigMap.class, configMapName)
                     .map(configMap -> new UploadOption(filePart, policy, configMap));
             })
-            .flatMap(uploadContext -> {
-                var handlers = extensionComponentsFinder.getExtensions(AttachmentHandler.class);
-                return Flux.fromIterable(handlers)
-                    .concatMap(handler -> handler.upload(uploadContext))
-                    .next();
-            })
+            .flatMap(uploadContext -> extensionGetter.getExtensions(AttachmentHandler.class)
+                .concatMap(handler -> handler.upload(uploadContext))
+                .next())
             .switchIfEmpty(Mono.error(() -> new ServerErrorException(
                 "No suitable handler found for uploading the attachment.", null)))
             .doOnNext(attachment -> {
@@ -106,32 +112,70 @@ public class DefaultAttachmentService implements AttachmentService {
         return client.get(Policy.class, spec.getPolicyName())
             .flatMap(policy -> client.get(ConfigMap.class, policy.getSpec().getConfigMapName())
                 .map(configMap -> new DeleteOption(attachment, policy, configMap)))
-            .flatMap(deleteOption -> {
-                var handlers = extensionComponentsFinder.getExtensions(AttachmentHandler.class);
-                return Flux.fromIterable(handlers)
-                    .concatMap(handler -> handler.delete(deleteOption))
-                    .next();
-            });
+            .flatMap(deleteOption -> extensionGetter.getExtensions(AttachmentHandler.class)
+                .concatMap(handler -> handler.delete(deleteOption))
+                .next());
     }
 
     @Override
     public Mono<URI> getPermalink(Attachment attachment) {
-        var handlers = extensionComponentsFinder.getExtensions(AttachmentHandler.class);
         return client.get(Policy.class, attachment.getSpec().getPolicyName())
             .flatMap(policy -> client.get(ConfigMap.class, policy.getSpec().getConfigMapName())
-                .flatMap(configMap -> Flux.fromIterable(handlers)
+                .flatMap(configMap -> extensionGetter.getExtensions(AttachmentHandler.class)
                     .concatMap(handler -> handler.getPermalink(attachment, policy, configMap))
-                    .next()));
+                    .next()
+                )
+            );
     }
 
     @Override
     public Mono<URI> getSharedURL(Attachment attachment, Duration ttl) {
-        var handlers = extensionComponentsFinder.getExtensions(AttachmentHandler.class);
         return client.get(Policy.class, attachment.getSpec().getPolicyName())
             .flatMap(policy -> client.get(ConfigMap.class, policy.getSpec().getConfigMapName())
-                .flatMap(configMap -> Flux.fromIterable(handlers)
+                .flatMap(configMap -> extensionGetter.getExtensions(AttachmentHandler.class)
                     .concatMap(handler -> handler.getSharedURL(attachment, policy, configMap, ttl))
-                    .next()));
+                    .next()
+                )
+            );
+    }
+
+    @Override
+    public Mono<Attachment> uploadFromUrl(@NonNull URL url, @NonNull String policyName,
+        String groupName, String filename) {
+        var uri = URI.create(url.toString());
+        AtomicReference<MediaType> mediaTypeRef = new AtomicReference<>();
+        AtomicReference<String> fileNameRef = new AtomicReference<>(filename);
+
+        Mono<Flux<DataBuffer>> contentMono = dataBufferFetcher.head(uri)
+            .map(response -> {
+                var httpHeaders = response.getHeaders();
+                if (!StringUtils.hasText(fileNameRef.get())) {
+                    fileNameRef.set(getExternalUrlFilename(uri, httpHeaders));
+                }
+                MediaType contentType = httpHeaders.getContentType();
+                mediaTypeRef.set(contentType);
+                return response;
+            })
+            .map(response -> dataBufferFetcher.fetch(uri));
+
+        return contentMono.flatMap(
+                (content) -> upload(policyName, groupName, fileNameRef.get(), content,
+                    mediaTypeRef.get())
+            )
+            .onErrorResume(throwable -> Mono.error(
+                new ServerWebInputException(
+                    "Failed to transfer the attachment from the external URL."))
+            );
+    }
+
+    private static String getExternalUrlFilename(URI externalUrl, HttpHeaders httpHeaders) {
+        String fileName = httpHeaders.getContentDisposition().getFilename();
+        if (!StringUtils.hasText(fileName)) {
+            var path = externalUrl.getPath();
+            fileName = Paths.get(path).getFileName().toString();
+        }
+        // TODO get file extension from media type
+        return fileName;
     }
 
     private <T> Mono<T> authenticationConsumer(Function<Authentication, Mono<T>> func) {
