@@ -2,39 +2,42 @@ package run.halo.app.infra;
 
 import java.util.regex.Pattern;
 import lombok.experimental.UtilityClass;
-import org.apache.commons.lang3.StringUtils;
+import org.springframework.context.i18n.LocaleContextHolder;
+import org.springframework.validation.BeanPropertyBindingResult;
+import org.springframework.validation.BindingResult;
+import org.springframework.validation.Validator;
+import org.springframework.web.server.ServerWebExchange;
 
 @UtilityClass
 public class ValidationUtils {
-    public static final Pattern NAME_PATTERN =
-        Pattern.compile("^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$");
-
-    public static final String EMAIL_REGEX =
-        "^[a-zA-Z0-9_+&*-]+(?:\\.[a-zA-Z0-9_+&*-]+)*@(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,7}$";
-
-    public static final String NAME_VALIDATION_MESSAGE = """
-        Super administrator username must be a valid subdomain name, the name must:
-        1. contain no more than 63 characters
-        2. contain only lowercase alphanumeric characters, '-' or '.'
-        3. start with an alphanumeric character
-        4. end with an alphanumeric character
-        """;
+    public static final String NAME_REGEX =
+        "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$";
+    public static final Pattern NAME_PATTERN = Pattern.compile(NAME_REGEX);
 
     /**
-     * Validates the name.
-     *
-     * @param name name for validation
-     * @return true if the name is valid
+     * A-Z, a-z, 0-9, !@#$%^&* are allowed.
      */
-    public static boolean validateName(String name) {
-        if (StringUtils.isBlank(name)) {
-            return false;
+    public static final String PASSWORD_REGEX = "^[A-Za-z0-9!@#$%^&*]+$";
+
+    public static final Pattern PASSWORD_PATTERN = Pattern.compile(PASSWORD_REGEX);
+
+    /**
+     * Validate the target object with given locale context.
+     */
+    public static BindingResult validate(Object target, String objectName,
+        Validator validator, ServerWebExchange exchange) {
+        BindingResult bindingResult = new BeanPropertyBindingResult(target, objectName);
+        try {
+            LocaleContextHolder.setLocaleContext(exchange.getLocaleContext());
+            validator.validate(target, bindingResult);
+            return bindingResult;
+        } finally {
+            LocaleContextHolder.resetLocaleContext();
         }
-        boolean matches = NAME_PATTERN.matcher(name).matches();
-        return matches && name.length() <= 63;
     }
 
-    public static boolean isValidEmail(String email) {
-        return StringUtils.isNotBlank(email) && email.matches(EMAIL_REGEX);
+    public static BindingResult validate(Object target, Validator validator,
+        ServerWebExchange exchange) {
+        return validate(target, "form", validator, exchange);
     }
 }

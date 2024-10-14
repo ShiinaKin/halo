@@ -20,10 +20,11 @@ import org.springframework.util.Assert;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
+import run.halo.app.core.counter.CounterService;
 import run.halo.app.core.extension.content.Comment;
 import run.halo.app.core.extension.content.Reply;
-import run.halo.app.core.extension.service.RoleService;
-import run.halo.app.core.extension.service.UserService;
+import run.halo.app.core.user.service.RoleService;
+import run.halo.app.core.user.service.UserService;
 import run.halo.app.extension.ListOptions;
 import run.halo.app.extension.ListResult;
 import run.halo.app.extension.PageRequest;
@@ -31,7 +32,6 @@ import run.halo.app.extension.PageRequestImpl;
 import run.halo.app.extension.ReactiveExtensionClient;
 import run.halo.app.extension.router.selector.FieldSelector;
 import run.halo.app.infra.exception.RequestRestrictedException;
-import run.halo.app.metrics.CounterService;
 
 /**
  * A default implementation of {@link ReplyService}.
@@ -166,7 +166,7 @@ public class ReplyServiceImpl extends AbstractCommentService implements ReplySer
         return client.listBy(Reply.class, query.toListOptions(), query.toPageRequest())
             .flatMap(list -> Flux.fromStream(list.get()
                     .map(this::toListedReply))
-                .concatMap(Function.identity())
+                .flatMapSequential(Function.identity())
                 .collectList()
                 .map(listedReplies -> new ListResult<>(list.getPage(), list.getSize(),
                     list.getTotal(), listedReplies))

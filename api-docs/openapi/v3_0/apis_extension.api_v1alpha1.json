@@ -8666,11 +8666,19 @@
       },
       "AuthProviderSpec": {
         "required": [
+          "authType",
           "authenticationUrl",
           "displayName"
         ],
         "type": "object",
         "properties": {
+          "authType": {
+            "type": "string",
+            "enum": [
+              "FORM",
+              "OAUTH2"
+            ]
+          },
           "authenticationUrl": {
             "type": "string",
             "description": "Authentication url of the auth provider"
@@ -8694,9 +8702,11 @@
           "logo": {
             "type": "string"
           },
-          "priority": {
-            "type": "integer",
-            "format": "int32"
+          "method": {
+            "type": "string"
+          },
+          "rememberMeSupport": {
+            "type": "boolean"
           },
           "settingRef": {
             "$ref": "#/components/schemas/SettingRef"
@@ -11297,9 +11307,6 @@
         }
       },
       "PostStatus": {
-        "required": [
-          "phase"
-        ],
         "type": "object",
         "properties": {
           "commentsCount": {
@@ -12484,9 +12491,6 @@
         }
       },
       "SinglePageStatus": {
-        "required": [
-          "phase"
-        ],
         "type": "object",
         "properties": {
           "commentsCount": {
@@ -13248,34 +13252,13 @@
       },
       "UserConnectionSpec": {
         "required": [
-          "accessToken",
-          "displayName",
           "providerUserId",
           "registrationId",
           "username"
         ],
         "type": "object",
         "properties": {
-          "accessToken": {
-            "type": "string"
-          },
-          "avatarUrl": {
-            "type": "string"
-          },
-          "displayName": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "profileUrl": {
-            "type": "string"
-          },
           "providerUserId": {
-            "type": "string"
-          },
-          "refreshToken": {
             "type": "string"
           },
           "registrationId": {
