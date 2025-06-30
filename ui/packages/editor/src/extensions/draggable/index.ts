@@ -16,6 +16,7 @@ import {
 } from "@/tiptap/pm";
 import { Editor, Extension } from "@/tiptap/vue-3";
 import type { DraggableItemType, ExtensionOptions } from "@/types";
+import { throttle } from "lodash-es";
 
 // https://developer.mozilla.org/zh-CN/docs/Web/API/HTML_Drag_and_Drop_API
 // https://github.com/ueberdosis/tiptap/blob/7832b96afbfc58574785043259230801e179310f/demos/src/Experiments/GlobalDragHandle/Vue/DragHandle.js
@@ -33,6 +34,7 @@ let draggableHandleDom: HTMLElement | null = null;
 let currEditorView: EditorView;
 let activeNode: ActiveNode | null = null;
 let activeSelection: NodeSelection | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mouseleaveTimer: any;
 let dragging = false;
 let hoverOrClickDragItem = false;
@@ -161,6 +163,7 @@ const handleDragStartEvent = (event: DragEvent) => {
     event.dataTransfer.clearData();
     event.dataTransfer.setData("text/html", dom.innerHTML);
     event.dataTransfer.setData("text/plain", text);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     event.dataTransfer.setDragImage(activeNode?.el as any, 0, 0);
 
     currEditorView.dragging = {
@@ -289,6 +292,7 @@ const getDraggableItem = ({
   editor: Editor;
   view: EditorView;
   dom: HTMLElement;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   event?: any;
   depth?: number;
 }): DraggableItemType | boolean | undefined => {
@@ -465,7 +469,7 @@ const Draggable = Extension.create({
         props: {
           handleDOMEvents: {
             // @ts-ignore
-            mousemove: (view: EditorView, event) => {
+            mousemove: throttle((view: EditorView, event: MouseEvent) => {
               const coords = { left: event.clientX, top: event.clientY };
               const pos = view.posAtCoords(coords);
               if (!pos || !pos.pos) return false;
@@ -476,6 +480,7 @@ const Draggable = Extension.create({
                 view.nodeDOM(nodePos) ||
                 view.domAtPos(nodePos)?.node ||
                 event.target;
+
               if (!nodeDom) {
                 hideDragHandleDOM();
                 return false;
@@ -511,14 +516,14 @@ const Draggable = Extension.create({
               }
               renderDragHandleDOM(view, activeNode);
               return false;
-            },
-            mouseleave: () => {
+            }, 100),
+            mouseleave: throttle(() => {
               clearTimeout(mouseleaveTimer);
               mouseleaveTimer = setTimeout(() => {
                 hideDragHandleDOM();
-              }, 400);
+              }, 800);
               return false;
-            },
+            }, 100),
           },
           handleKeyDown() {
             if (!draggableHandleDom) return false;
